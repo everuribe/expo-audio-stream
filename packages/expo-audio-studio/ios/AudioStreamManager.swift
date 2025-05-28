@@ -699,12 +699,11 @@ class AudioStreamManager: NSObject, AudioDeviceManagerDelegate {
         // Create the default tap block if none provided
         let tapBlock = customTapBlock ?? { [weak self] (buffer, time) in
             guard let self = self,
-                  let fileURL = self.recordingFileURL,
                   self.isRecording else {
                 return
             }
             // processAudioBuffer will handle resampling if needed
-            self.processAudioBuffer(buffer, fileURL: fileURL)
+            self.processAudioBuffer(buffer)
             self.lastBufferTime = time
         }
         
@@ -1392,12 +1391,11 @@ class AudioStreamManager: NSObject, AudioDeviceManagerDelegate {
     }
     
     /// Processes the audio buffer: handles resampling/format conversion if necessary,
-    /// writes the result to the WAV file on a background thread, and triggers
+    /// writes the result to the WAV file on a background thread if applicable, and triggers
     /// analysis processing and event emission based on intervals.
     /// - Parameters:
     ///   - buffer: The audio buffer received from the input node tap.
-    ///   - fileURL: The URL of the file to write the data to (ignored, uses self.fileHandle).
-    private func processAudioBuffer(_ buffer: AVAudioPCMBuffer, fileURL: URL) {
+    private func processAudioBuffer(_ buffer: AVAudioPCMBuffer) {
         guard let settings = recordingSettings else {
             Logger.debug("processAudioBuffer: Recording settings not available")
             return
@@ -2028,7 +2026,7 @@ class AudioStreamManager: NSObject, AudioDeviceManagerDelegate {
                 guard let self = self, self.isRecording else { return }
                 
                 // Process the buffer and ensure it's written to file
-                self.processAudioBuffer(buffer, fileURL: self.recordingFileURL!)
+                self.processAudioBuffer(buffer)
                 self.lastBufferTime = time
                 
                 // Special handling for fallback: force emission regularly to restart flow
