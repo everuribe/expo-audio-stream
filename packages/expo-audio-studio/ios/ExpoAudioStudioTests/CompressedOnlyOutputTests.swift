@@ -27,7 +27,6 @@ class CompressedOnlyOutputTests: XCTestCase {
         // Given: Recording settings with primary disabled and compressed enabled (AAC)
         var settings = RecordingSettings(
             sampleRate: 44100,
-            desiredSampleRate: 44100,
             autoResumeAfterInterruption: false
         )
         settings.numberOfChannels = 1
@@ -96,7 +95,6 @@ class CompressedOnlyOutputTests: XCTestCase {
         // Given: Recording settings with primary disabled and compressed enabled (Opus)
         var settings = RecordingSettings(
             sampleRate: 48000,
-            desiredSampleRate: 48000,
             autoResumeAfterInterruption: false
         )
         settings.numberOfChannels = 1
@@ -140,7 +138,6 @@ class CompressedOnlyOutputTests: XCTestCase {
         // Given: Recording with compressed output
         var settings = RecordingSettings(
             sampleRate: 44100,
-            desiredSampleRate: 44100,
             autoResumeAfterInterruption: false
         )
         settings.numberOfChannels = 1
@@ -202,7 +199,6 @@ class CompressedOnlyOutputTests: XCTestCase {
         // Given: Streaming configuration with compression
         var settings = RecordingSettings(
             sampleRate: 44100,
-            desiredSampleRate: 44100,
             autoResumeAfterInterruption: false
         )
         settings.numberOfChannels = 1
