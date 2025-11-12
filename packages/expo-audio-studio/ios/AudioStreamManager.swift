@@ -792,8 +792,6 @@ class AudioStreamManager: NSObject, AudioDeviceManagerDelegate {
 
         // Update auto-resume preference from settings
         autoResumeAfterInterruption = settings.autoResumeAfterInterruption
-
-        bufferDurationSeconds = settings.bufferDurationSeconds
         skipFileWriting = settings.skipFileWriting
         
         // Enforce minimum interval to prevent excessive CPU usage
@@ -809,6 +807,7 @@ class AudioStreamManager: NSObject, AudioDeviceManagerDelegate {
         lastEmittedSize = 0
         lastEmittedCompressedSizeAnalysis = 0
         isPaused = false
+        // Initialize startTime early to prevent duration being 0
 
         // Create recording file first
         recordingFileURL = createRecordingFile()
