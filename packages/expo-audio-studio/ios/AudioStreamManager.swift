@@ -721,20 +721,24 @@ class AudioStreamManager: NSObject, AudioDeviceManagerDelegate {
         }
         
         // Calculate buffer size from duration if specified
+        // NOTE: Buffer size is calculated using the hardware input format's sample rate,
+        // NOT the target recordingSettings.sampleRate. The recording settings sample rate
+        // is only used for resampling audio data in processAudioBuffer() for the written
+        // file and compressed output. The tap receives data at the hardware's native rate.
         let bufferSize: AVAudioFrameCount
         if let duration = recordingSettings?.bufferDurationSeconds {
-            // Use target sample rate from settings for calculation
-            let targetSampleRate = Double(recordingSettings?.sampleRate ?? 16000)
-            let calculatedSize = AVAudioFrameCount(duration * targetSampleRate)
+            // Use hardware sample rate for buffer size calculation
+            let hardwareSampleRate = inputHardwareFormat.sampleRate
+            let calculatedSize = AVAudioFrameCount(duration * hardwareSampleRate)
             
             // iOS enforces minimum buffer size of ~4800 frames
             if calculatedSize < 4800 {
-                Logger.debug("AudioStreamManager", "Requested buffer size \(calculatedSize) frames (from \(duration)s at \(targetSampleRate)Hz) is below iOS minimum of ~4800 frames")
+                Logger.debug("AudioStreamManager", "Requested buffer size \(calculatedSize) frames (from \(duration)s at \(hardwareSampleRate)Hz) is below iOS minimum of ~4800 frames")
             }
             
             // Apply safety clamping
-            Logger.debug("AudioStreamManager", "Buffer size: requested=\(calculatedSize), clamped=\(bufferSize) frames")
             bufferSize = max(4800, min(calculatedSize, 16384))
+            Logger.debug("AudioStreamManager", "Buffer size: requested=\(calculatedSize), clamped=\(bufferSize) frames (hardware rate: \(hardwareSampleRate)Hz)")
         } else {
             bufferSize = 1024 // Default
         }

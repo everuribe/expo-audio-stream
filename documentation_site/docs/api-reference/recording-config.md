@@ -20,7 +20,8 @@ The recording configuration specifies the settings used for audio recording on d
 
 ```tsx
 export interface RecordingConfig {
-    sampleRate?: SampleRate // Sample rate for recording (16000, 44100, or 48000 Hz)
+    sampleRate?: SampleRate // Target sample rate for output files and stream data (16000, 44100, or 48000 Hz)
+                            // Note: Hardware captures at native rate; resampling happens automatically
     channels?: 1 | 2 // Number of audio channels (1 for mono, 2 for stereo)
     encoding?: EncodingType // Encoding type for the recording (pcm_32bit, pcm_16bit, pcm_8bit)
     interval?: number // Interval in milliseconds at which to emit recording data (minimum: 10ms)

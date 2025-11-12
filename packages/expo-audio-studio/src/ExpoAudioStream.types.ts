@@ -376,7 +376,18 @@ export interface OutputConfig {
 }
 
 export interface RecordingConfig {
-    /** Sample rate for recording in Hz (16000, 44100, or 48000) */
+    /**
+     * Sample rate for recording in Hz (16000, 44100, or 48000).
+     * 
+     * This specifies the target sample rate for:
+     * - The written audio file (if primary output is enabled)
+     * - The compressed output file (if compression is enabled)
+     * - Audio data emitted in onAudioStream callbacks
+     * 
+     * **Note**: On iOS, audio is captured at the hardware's native sample rate and automatically
+     * resampled to match this target rate. This parameter does NOT affect the hardware buffer size,
+     * which is always calculated using the hardware's native sample rate.
+     */
     sampleRate?: SampleRate
 
     /** Number of audio channels (1 for mono, 2 for stereo) */
