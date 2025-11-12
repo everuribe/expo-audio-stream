@@ -733,8 +733,8 @@ class AudioStreamManager: NSObject, AudioDeviceManagerDelegate {
             }
             
             // Apply safety clamping
-            bufferSize = max(256, min(calculatedSize, 16384))
             Logger.debug("AudioStreamManager", "Buffer size: requested=\(calculatedSize), clamped=\(bufferSize) frames")
+            bufferSize = max(4800, min(calculatedSize, 16384))
         } else {
             bufferSize = 1024 // Default
         }
