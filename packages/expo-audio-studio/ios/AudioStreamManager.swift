@@ -115,6 +115,10 @@ class AudioStreamManager: NSObject, AudioDeviceManagerDelegate {
 
     // Add the stopping flag to the class properties
     private var stopping: Bool = false
+    
+    // Performance optimization: Cache file sizes during recording
+    private var cachedWavFileSize: Int64 = 0
+    private var cachedCompressedFileSize: Int64 = 0
 
     /// Initializes the AudioStreamManager
     override init() {
@@ -339,6 +343,12 @@ class AudioStreamManager: NSObject, AudioDeviceManagerDelegate {
             return lastDuration
         }
         
+        // Safety check: if recording but no start time, use current time
+        if isRecording && startTime == nil {
+            Logger.debug("AudioStreamManager", "WARNING: Recording active but startTime is nil, setting to current time")
+            startTime = Date()
+        }
+        
         guard let startTime = self.startTime else { return 0 }
         
         let now = Date()
@@ -549,7 +559,9 @@ class AudioStreamManager: NSObject, AudioDeviceManagerDelegate {
         // Choose extension based on whether this is a compressed file
         let fileExtension: String
         if isCompressed {
-            fileExtension = recordingSettings?.compressedFormat.lowercased() ?? "aac"
+            // iOS always produces M4A container when using AAC or Opus formats
+            // Opus falls back to AAC in M4A container on iOS
+            fileExtension = "m4a"
         } else {
             fileExtension = "wav"
         }
@@ -641,7 +653,7 @@ class AudioStreamManager: NSObject, AudioDeviceManagerDelegate {
         }
         
         // Add compression info if enabled
-        if settings.enableCompressedOutput,
+        if settings.output.compressed.enabled,
            let compressedURL = compressedFileURL,
            FileManager.default.fileExists(atPath: compressedURL.path) {
             do {
@@ -702,16 +714,32 @@ class AudioStreamManager: NSObject, AudioDeviceManagerDelegate {
                   self.isRecording else {
                 return
             }
-            // processAudioBuffer will handle resampling if needed
+            // Process audio buffer for streaming, analysis, and optional file writing
+            // Note: Audio streaming works regardless of primary output settings (consistent with Web/Android)
             self.processAudioBuffer(buffer)
             self.lastBufferTime = time
         }
         
-        // Install the tap with hardware format
-        var bufferSize: AVAudioFrameCount = 1024
-        if let bufferDurationSeconds = bufferDurationSeconds {
-            bufferSize = AVAudioFrameCount(bufferDurationSeconds * Double(inputHardwareFormat.sampleRate))
+        // Calculate buffer size from duration if specified
+        let bufferSize: AVAudioFrameCount
+        if let duration = recordingSettings?.bufferDurationSeconds {
+            // Use target sample rate from settings for calculation
+            let targetSampleRate = Double(recordingSettings?.sampleRate ?? 16000)
+            let calculatedSize = AVAudioFrameCount(duration * targetSampleRate)
+            
+            // iOS enforces minimum buffer size of ~4800 frames
+            if calculatedSize < 4800 {
+                Logger.debug("AudioStreamManager", "Requested buffer size \(calculatedSize) frames (from \(duration)s at \(targetSampleRate)Hz) is below iOS minimum of ~4800 frames")
+            }
+            
+            // Apply safety clamping
+            bufferSize = max(256, min(calculatedSize, 16384))
+            Logger.debug("AudioStreamManager", "Buffer size: requested=\(calculatedSize), clamped=\(bufferSize) frames")
+        } else {
+            bufferSize = 1024 // Default
         }
+        
+        // Install the tap with hardware format
         inputNode.installTap(onBus: 0, bufferSize: bufferSize, format: inputHardwareFormat, block: tapBlock)
         Logger.debug("AudioStreamManager", "Tap installed with hardware-compatible format")
         
@@ -764,8 +792,9 @@ class AudioStreamManager: NSObject, AudioDeviceManagerDelegate {
         bufferDurationSeconds = settings.bufferDurationSeconds
         skipFileWriting = settings.skipFileWriting
         
-        emissionInterval = max(100.0, Double(settings.interval ?? 1000)) / 1000.0
-        emissionIntervalAnalysis = max(100.0, Double(settings.intervalAnalysis ?? 500)) / 1000.0
+        // Enforce minimum interval to prevent excessive CPU usage
+        emissionInterval = max(10.0, Double(settings.interval ?? 1000)) / 1000.0
+        emissionIntervalAnalysis = max(10.0, Double(settings.intervalAnalysis ?? 500)) / 1000.0
         lastEmissionTime = nil // Will be set when recording starts
         lastEmissionTimeAnalysis = nil // Will be set when recording starts
         accumulatedData.removeAll()
@@ -777,33 +806,31 @@ class AudioStreamManager: NSObject, AudioDeviceManagerDelegate {
         lastEmittedCompressedSizeAnalysis = 0
         isPaused = false
 
-        if !skipFileWriting {
-            // Create recording file first
-            recordingFileURL = createRecordingFile()
-            if let url = recordingFileURL {
-                do {
-                    // Ensure directory exists if needed (createRecordingFile should handle this, but belt-and-suspenders)
-                    try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: nil)
-                    // Create the file if it doesn't exist (createRecordingFile should also handle this)
-                    if !fileManager.fileExists(atPath: url.path) {
-                        fileManager.createFile(atPath: url.path, contents: nil, attributes: nil)
-                    }
-                    // Open the handle for writing
-                    self.fileHandle = try FileHandle(forWritingTo: url)
-                    // Write initial dummy header immediately
-                    let header = createWavHeader(dataSize: 0)
-                    self.fileHandle?.write(header)
-                    self.totalDataSize = Int64(WAV_HEADER_SIZE) // Initialize size with header size
-                    Logger.debug("AudioStreamManager", "File handle opened and initial header written for \(url.path). Initial size: \(self.totalDataSize)")
-                } catch {
-                    Logger.debug("AudioStreamManager", "Error creating/opening file handle: \(error.localizedDescription)")
-                    // No need to call cleanupPreparation here, return false will handle it
-                    return false
+        // Create recording file first
+        recordingFileURL = createRecordingFile()
+        if let url = recordingFileURL {
+            do {
+                // Ensure directory exists if needed (createRecordingFile should handle this, but belt-and-suspenders)
+                try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: nil)
+                // Create the file if it doesn't exist (createRecordingFile should also handle this)
+                if !fileManager.fileExists(atPath: url.path) {
+                    fileManager.createFile(atPath: url.path, contents: nil, attributes: nil)
                 }
-            } else {
-                Logger.debug("AudioStreamManager", "Error: Failed to create recording file URL.")
+                // Open the handle for writing
+                self.fileHandle = try FileHandle(forWritingTo: url)
+                // Write initial dummy header immediately
+                let header = createWavHeader(dataSize: 0)
+                self.fileHandle?.write(header)
+                self.totalDataSize = Int64(WAV_HEADER_SIZE) // Initialize size with header size
+                Logger.debug("AudioStreamManager", "File handle opened and initial header written for \(url.path). Initial size: \(self.totalDataSize)")
+            } catch {
+                Logger.debug("AudioStreamManager", "Error creating/opening file handle: \(error.localizedDescription)")
+                // No need to call cleanupPreparation here, return false will handle it
                 return false
             }
+        } else {
+            Logger.debug("AudioStreamManager", "Error: Failed to create recording file URL.")
+            return false
         }
         
         var newSettings = settings
@@ -818,43 +845,8 @@ class AudioStreamManager: NSObject, AudioDeviceManagerDelegate {
                 newSettings.sampleRate = settings.sampleRate  // Keep original sample rate
             }
             
-            // Get base configuration from user settings or defaults
-            var category: AVAudioSession.Category = .playAndRecord
-            var mode: AVAudioSession.Mode = .default
-            var options: AVAudioSession.CategoryOptions = [.allowBluetooth, .mixWithOthers]
-            
-            if let audioSessionConfig = settings.ios?.audioSession {
-                category = audioSessionConfig.category
-                mode = audioSessionConfig.mode
-                options = audioSessionConfig.categoryOptions
-            }
-            
-            // Append necessary options for background recording if keepAwake is enabled
-            if settings.keepAwake {
-                Logger.debug("AudioStreamManager", "keepAwake enabled - configuring for background recording")
-                // Set the category to PlayAndRecord with proper background options
-                options.insert(.mixWithOthers)
-                // Add duckOthers to reduce volume of other apps instead of stopping them
-                options.insert(.duckOthers)
-                
-                // Configure audio session for background audio
-                do {
-                    try session.setCategory(.playAndRecord, mode: .default, options: options)
-                    try session.setActive(true, options: .notifyOthersOnDeactivation)
-                    // Ensure the app has appropriate Info.plist settings for background audio
-                    Logger.debug("AudioStreamManager", "Audio session configured for background recording with options: \(options)")
-                } catch {
-                    Logger.debug("AudioStreamManager", "Failed to configure audio session for background: \(error)")
-                    try session.setActive(true, options: .notifyOthersOnDeactivation)
-                }
-            } else {
-                Logger.debug("AudioStreamManager", "keepAwake disabled - using standard session configuration")
-                // If keepAwake is false, don't add background audio options
-                try session.setActive(true)
-            }
-            
-            // Apply the final configuration
-            try session.setCategory(category, mode: mode, options: options)
+            // Configure audio session based on audio focus strategy
+            try configureAudioSession(for: settings)
             // NOTE: We intentionally DO NOT call session.setPreferredSampleRate().
             // Trying to force a sample rate different from the hardware's actual rate
             // often prevents the input node's tap from receiving any buffers.
@@ -865,9 +857,9 @@ class AudioStreamManager: NSObject, AudioDeviceManagerDelegate {
 
             // Log session config details as single lines for clarity
             Logger.debug("AudioStreamManager", "Audio session configured:")
-            Logger.debug("AudioStreamManager", "  - category: \(category)")
-            Logger.debug("AudioStreamManager", "  - mode: \(mode)")
-            Logger.debug("AudioStreamManager", "  - options: \(options)")
+            Logger.debug("AudioStreamManager", "  - category: \(session.category)")
+            Logger.debug("AudioStreamManager", "  - mode: \(session.mode)")
+            Logger.debug("AudioStreamManager", "  - options: \(session.categoryOptions)")
             Logger.debug("AudioStreamManager", "  - keepAwake: \(settings.keepAwake)")
             Logger.debug("AudioStreamManager", "  - emission interval: \(emissionInterval * 1000)ms")
             Logger.debug("AudioStreamManager", "  - analysis interval: \(emissionIntervalAnalysis * 1000)ms")
@@ -876,11 +868,6 @@ class AudioStreamManager: NSObject, AudioDeviceManagerDelegate {
             Logger.debug("AudioStreamManager", "  - channels: \(settings.numberOfChannels)")
             Logger.debug("AudioStreamManager", "  - bit depth: \(settings.bitDepth)-bit")
             Logger.debug("AudioStreamManager", "  - compression enabled: \(settings.enableCompressedOutput)")
-            if let bufferDurationSeconds {
-                Logger.debug("AudioStreamManager", "  - buffer size: \(bufferDurationSeconds)")
-            }
-            Logger.debug("AudioStreamManager", "  - skip file writing: \(skipFileWriting)")
-
 
             // Use our shared tap installation method
             let tapFormat = installTapWithHardwareFormat()
@@ -896,13 +883,13 @@ class AudioStreamManager: NSObject, AudioDeviceManagerDelegate {
             audioEngine.prepare() // Prepare the engine without starting it
             
             // Setup compressed recording if enabled
-            if settings.enableCompressedOutput {
+            if settings.output.compressed.enabled {
                 // Create compressed settings
                 let compressedSettings: [String: Any] = [
-                    AVFormatIDKey: settings.compressedFormat == "aac" ? kAudioFormatMPEG4AAC : kAudioFormatOpus,
+                    AVFormatIDKey: settings.output.compressed.format == "aac" ? kAudioFormatMPEG4AAC : kAudioFormatOpus,
                     AVSampleRateKey: Float64(settings.sampleRate),
                     AVNumberOfChannelsKey: settings.numberOfChannels,
-                    AVEncoderBitRateKey: settings.compressedBitRate,
+                    AVEncoderBitRateKey: settings.output.compressed.bitrate,
                     AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue,
                     AVEncoderBitDepthHintKey: settings.bitDepth
                 ]
@@ -929,8 +916,8 @@ class AudioStreamManager: NSObject, AudioDeviceManagerDelegate {
                             } else {
                                 // Note: We don't start the recorder yet, just prepare it
                                 Logger.debug("AudioStreamManager", "Compressed recording prepared successfully")
-                                compressedFormat = settings.compressedFormat
-                                compressedBitRate = settings.compressedBitRate
+                                            compressedFormat = settings.output.compressed.format
+            compressedBitRate = settings.output.compressed.bitrate
                             }
                         }
                     } catch {
@@ -1007,21 +994,23 @@ class AudioStreamManager: NSObject, AudioDeviceManagerDelegate {
             return nil
         }
         
-        guard let settings = recordingSettings else {
-            Logger.debug("Missing settings")
+        guard let settings = recordingSettings, 
+              let fileUri = recordingFileURL?.absoluteString else {
+            Logger.debug("Missing settings or file URI")
             return nil
         }
         
-        if !skipFileWriting, recordingFileURL?.absoluteString == nil {
-            Logger.debug("Missing file URI")
-            return nil
-        }
+        // File URI is optional when primary output is disabled
+        let fileUri = recordingFileURL?.absoluteString ?? ""
         
         do {
             enableWakeLock()
             
             // Set recording state *before* starting engine to avoid race condition
-            startTime = Date()
+            // Set startTime as early as possible to ensure duration calculation works
+            if startTime == nil {
+                startTime = Date()
+            }
             totalPausedDuration = 0
             currentPauseStart = nil
             lastEmissionTime = Date()
@@ -1391,7 +1380,7 @@ class AudioStreamManager: NSObject, AudioDeviceManagerDelegate {
     }
     
     /// Processes the audio buffer: handles resampling/format conversion if necessary,
-    /// writes the result to the WAV file on a background thread if applicable, and triggers
+    /// writes the result to the WAV file on a background thread, and triggers
     /// analysis processing and event emission based on intervals.
     /// - Parameters:
     ///   - buffer: The audio buffer received from the input node tap.
@@ -1412,6 +1401,16 @@ class AudioStreamManager: NSObject, AudioDeviceManagerDelegate {
         // targetSampleRate and targetFormat remain the user's requested final format
         let targetSampleRate = Double(settings.sampleRate)
         let targetFormat: AVAudioCommonFormat = settings.bitDepth == 32 ? .pcmFormatFloat32 : .pcmFormatInt16
+        
+        // Log bit depth information
+        Logger.debug("""
+            BIT DEPTH DEBUG:
+            - Settings bitDepth: \(settings.bitDepth)
+            - Target format: \(targetFormat == .pcmFormatFloat32 ? "pcmFormatFloat32" : "pcmFormatInt16")
+            - Buffer format: \(buffer.format.commonFormat.rawValue)
+            - Buffer sample rate: \(buffer.format.sampleRate)
+            - Target sample rate: \(targetSampleRate)
+        """)
 
         // Buffer to be processed - initially the input buffer
         var bufferToProcess: AVAudioPCMBuffer = buffer
@@ -1455,24 +1454,23 @@ class AudioStreamManager: NSObject, AudioDeviceManagerDelegate {
         // Create an immutable copy for background/event emission
         let dataToWrite = Data(bytes: bufferData, count: Int(audioData.mDataByteSize))
 
-        if !skipFileWriting {
-            // --- Background File Writing ---
-            // Use the persistent fileHandle opened during preparation.
-            DispatchQueue.global(qos: .utility).async { [weak self] in
-                guard let self = self, let handle = self.fileHandle else {
-                    Logger.debug("BG Write Error: File handle is nil.")
-                    return
-                }
-                do {
-                    try handle.seekToEnd()
-                    try handle.write(contentsOf: dataToWrite)
-                    // Update total size state
-                    self.totalDataSize += Int64(dataToWrite.count)
-                } catch {
-                    Logger.debug("BG Write Error: Failed to seek/write: \(error.localizedDescription)")
-                }
+        // --- Background File Writing ---
+        // Use the persistent fileHandle opened during preparation.
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self = self, let handle = self.fileHandle else {
+                Logger.debug("BG Write Error: File handle is nil.")
+                return
+            }
+            do {
+                try handle.seekToEnd()
+                try handle.write(contentsOf: dataToWrite)
+                // Update total size state
+                self.totalDataSize += Int64(dataToWrite.count)
+            } catch {
+                 Logger.debug("BG Write Error: Failed to seek/write: \(error.localizedDescription)")
             }
         }
+
         // --- Event Emission & Analysis ---
         accumulatedData.append(dataToWrite)
         accumulatedAnalysisData.append(dataToWrite)
@@ -1681,8 +1679,23 @@ class AudioStreamManager: NSObject, AudioDeviceManagerDelegate {
         }
         audioEngine.inputNode.removeTap(onBus: 0)
         
-        // Stop compressed recording if active
-        compressedRecorder?.stop()
+        // Stop compressed recording if active and update cached size
+        if let recorder = compressedRecorder {
+            recorder.stop()
+            
+            // Update cached compressed file size after stopping
+            if let compressedURL = compressedFileURL {
+                do {
+                    let attributes = try FileManager.default.attributesOfItem(atPath: compressedURL.path)
+                    if let size = attributes[.size] as? Int64 {
+                        cachedCompressedFileSize = size
+                        Logger.debug("Updated compressed file size after stop: \(size) bytes")
+                    }
+                } catch {
+                    Logger.debug("Failed to update compressed file size: \(error)")
+                }
+            }
+        }
         
         // Get the final duration before changing state
         let finalDuration = currentRecordingDuration()
@@ -1728,21 +1741,15 @@ class AudioStreamManager: NSObject, AudioDeviceManagerDelegate {
         // Reset audio engine
         audioEngine.reset()
         
-        if !skipFileWriting,
-           recordingFileURL == nil {
-            Logger.debug("Recording file URL is nil.")
-            stopping = false // Reset stopping flag before returning nil
-            return nil
-        }
-        
-        guard let settings = recordingSettings else {
-            Logger.debug("Recording settings is nil.")
+        guard let fileURL = recordingFileURL,
+              let settings = recordingSettings else {
+            Logger.debug("Recording or file URL is nil.")
             stopping = false // Reset stopping flag before returning nil
             return nil
         }
         
         // Reset stopping flag before returning
-        let result = createRecordingResult(fileURL: recordingFileURL, settings: settings, finalDuration: finalDuration)
+        let result = createRecordingResult(fileURL: fileURL, settings: settings, finalDuration: finalDuration)
         stopping = false
         
         // Return after all cleanup tasks are completed
@@ -1755,80 +1762,63 @@ class AudioStreamManager: NSObject, AudioDeviceManagerDelegate {
     ///   - settings: The settings used for recording
     ///   - finalDuration: The final duration of the recording
     /// - Returns: A RecordingResult object or nil if validation fails
-    private func createRecordingResult(fileURL: URL?, settings: RecordingSettings, finalDuration: TimeInterval) -> RecordingResult? {
+    private func createRecordingResult(fileURL: URL, settings: RecordingSettings, finalDuration: TimeInterval) -> RecordingResult? {
+        // Validate WAV file
+        let wavPath = fileURL.path
         do {
-            // Validate WAV file
-            var wavFileSize: Int64?
-            if !skipFileWriting, let fileURL {
-                let wavPath = fileURL.path
-                // Check if WAV file exists
-                let wavFileAttributes = try FileManager.default.attributesOfItem(atPath: wavPath)
-                let finalFileSize = wavFileAttributes[FileAttributeKey.size] as? Int64 ?? 0
-                wavFileSize = finalFileSize
-                
-                Logger.debug("""
+            // Check if WAV file exists
+            let wavFileAttributes = try FileManager.default.attributesOfItem(atPath: wavPath)
+            let wavFileSize = wavFileAttributes[FileAttributeKey.size] as? Int64 ?? 0
+            
+            Logger.debug("""
                 WAV File validation:
                 - Path: \(wavPath)
                 - Exists: true
-                - Size: \(finalFileSize) bytes
+                - Size: \(wavFileSize) bytes
                 - Duration: \(finalDuration) seconds
                 - Expected minimum size: \(WAV_HEADER_SIZE) bytes (WAV header)
                 """)
-                
-                // Use the final totalDataSize tracked by the background queue
-                let finalDataChunkSize = self.totalDataSize - Int64(WAV_HEADER_SIZE)
-                if finalDataChunkSize <= 0 {
-                    Logger.debug("Recording file data chunk size is zero or negative (\(finalDataChunkSize) bytes), likely no audio data was recorded successfully after header")
-                    // Optionally delete the empty file?
-                    // try? FileManager.default.removeItem(at: fileURL)
-                    return nil
-                }
-                
-                // Update the WAV header with the correct final file size
-                updateWavHeader(fileURL: fileURL, totalDataSize: finalDataChunkSize)
-                Logger.debug("Final WAV header updated. Data chunk size: \(finalDataChunkSize)")
-            }
             
-            // Validate compressed file if enabled
+            // Use the final totalDataSize tracked by the background queue
+            let finalDataChunkSize = self.totalDataSize - Int64(WAV_HEADER_SIZE)
+            if finalDataChunkSize <= 0 {
+                Logger.debug("Recording file data chunk size is zero or negative (\(finalDataChunkSize) bytes), likely no audio data was recorded successfully after header")
+                // Optionally delete the empty file?
+                // try? FileManager.default.removeItem(at: fileURL)
+                return nil
+            }
+
+            // Update the WAV header with the correct final file size
+            updateWavHeader(fileURL: fileURL, totalDataSize: finalDataChunkSize)
+            Logger.debug("Final WAV header updated. Data chunk size: \(finalDataChunkSize)")
+            
+            // Check for compressed output using cached size
             var compression: CompressedRecordingInfo?
-            if let compressedURL = compressedFileURL {
-                let compressedPath = compressedURL.path
-                if FileManager.default.fileExists(atPath: compressedPath) {
-                    let compressedAttributes = try FileManager.default.attributesOfItem(atPath: compressedPath)
-                    let compressedSize = compressedAttributes[FileAttributeKey.size] as? Int64 ?? 0
-                    
-                    Logger.debug("""
-                        Compressed File validation:
-                        - Path: \(compressedPath)
-                        - Format: \(compressedFormat)
-                        - Size: \(compressedSize) bytes
-                        - Bitrate: \(compressedBitRate) bps
-                        """)
-                    
-                    if compressedSize > 0 {
-                        compression = CompressedRecordingInfo(
-                            compressedFileUri: compressedURL.absoluteString,
-                            mimeType: compressedFormat == "aac" ? "audio/aac" : "audio/opus",
-                            bitrate: compressedBitRate,
-                            format: compressedFormat,
-                            size: compressedSize
-                        )
-                    } else {
-                        Logger.debug("Warning: Compressed file exists but is empty")
-                    }
-                } else {
-                    Logger.debug("Warning: Compressed file not found at path: \(compressedPath)")
-                }
+            if settings.output.compressed.enabled, 
+               let compressedURL = capturedCompressedURL,
+               capturedCompressedFileSize > 0 {
+                compression = CompressedRecordingInfo(
+                    compressedFileUri: compressedURL.absoluteString,
+                    mimeType: compressedFormat == "aac" ? "audio/aac" : "audio/opus",
+                    bitrate: compressedBitRate,
+                    format: compressedFormat,
+                    size: capturedCompressedFileSize
+                )
+                
+                Logger.debug("""
+                    Compressed File (cached - primary disabled):
+                    - Format: \(compressedFormat)
+                    - Size: \(capturedCompressedFileSize) bytes
+                    - Bitrate: \(compressedBitRate) bps
+                    """)
             }
-            
-            let durationMs = Int64(finalDuration * 1000)
             
             let result = RecordingResult(
-                fileUri: fileURL?.absoluteString ?? "",
-                filename: fileURL?.lastPathComponent ?? "",
+                fileUri: fileURL.absoluteString,
+                filename: fileURL.lastPathComponent,
                 mimeType: mimeType,
                 duration: durationMs,
-                size: wavFileSize ?? 0,
+                size: wavFileSize,
                 channels: settings.numberOfChannels,
                 bitDepth: settings.bitDepth,
                 sampleRate: settings.sampleRate,
@@ -1837,8 +1827,8 @@ class AudioStreamManager: NSObject, AudioDeviceManagerDelegate {
             
             Logger.debug("""
                 Recording completed successfully:
-                - WAV file: \(fileURL?.lastPathComponent ?? "No file")
-                - Size: \(wavFileSize ?? self.totalDataSize) bytes
+                - WAV file: \(fileURL.lastPathComponent)
+                - Size: \(wavFileSize) bytes
                 - Duration: \(durationMs)ms
                 - Sample rate: \(settings.sampleRate)Hz
                 - Bit depth: \(settings.bitDepth)-bit
@@ -1864,14 +1854,84 @@ class AudioStreamManager: NSObject, AudioDeviceManagerDelegate {
             accumulatedData.removeAll()
             accumulatedAnalysisData.removeAll()
             recordingUUID = nil
+            totalDataSize = 0
             
+            stopping = false
             return result
-            
-        } catch {
-            Logger.debug("Failed to validate recording files: \(error)")
+        }
+        
+        guard let fileURL = capturedFileURL else {
+            Logger.debug("Recording file URL is nil.")
+            stopping = false // Reset stopping flag before returning nil
             return nil
         }
+        
+        // PERFORMANCE OPTIMIZATION: Create result immediately with cached values
+        let durationMs = Int64(finalDuration * 1000)
+        
+        // Check compressed output
+        var compression: CompressedRecordingInfo?
+        if capturedSettings?.output.compressed.enabled == true, 
+           let compressedURL = capturedCompressedURL,
+           capturedCompressedFileSize > 0 {
+            compression = CompressedRecordingInfo(
+                compressedFileUri: compressedURL.absoluteString,
+                mimeType: compressedFormat == "aac" ? "audio/aac" : "audio/opus",
+                bitrate: compressedBitRate,
+                format: compressedFormat,
+                size: capturedCompressedFileSize
+            )
+        }
+        
+        // Create result with cached values - no file system access
+        let result = RecordingResult(
+            fileUri: fileURL.absoluteString,
+            filename: fileURL.lastPathComponent,
+            mimeType: mimeType,
+            duration: durationMs,
+            size: capturedWavFileSize,
+            channels: capturedSettings?.numberOfChannels ?? 1,
+            bitDepth: capturedSettings?.bitDepth ?? 16,
+            sampleRate: capturedSettings?.sampleRate ?? 44100,
+            compression: compression
+        )
+        
+        // Perform file operations asynchronously after returning result
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self = self else { return }
+            
+            // Update WAV header in background
+            let finalDataChunkSize = capturedTotalDataSize - Int64(WAV_HEADER_SIZE)
+            if finalDataChunkSize > 0 {
+                self.updateWavHeader(fileURL: fileURL, totalDataSize: finalDataChunkSize)
+                Logger.debug("Background: WAV header updated. Data chunk size: \(finalDataChunkSize)")
+            }
+            
+            // Cleanup
+            self.recordingSettings = nil
+            self.startTime = nil
+            self.totalPausedDuration = 0
+            self.currentPauseStart = nil
+            self.lastEmissionTime = nil
+            self.lastEmissionTimeAnalysis = nil
+            self.lastEmittedSize = 0
+            self.lastEmittedSizeAnalysis = 0
+            self.lastEmittedCompressedSize = 0
+            self.accumulatedData.removeAll()
+            self.accumulatedAnalysisData.removeAll()
+            self.recordingUUID = nil
+            self.totalDataSize = 0
+            self.cachedWavFileSize = 0
+            self.cachedCompressedFileSize = 0
+            self.recordingFileURL = nil
+            self.compressedFileURL = nil
+            self.fileHandle = nil
+        }
+        
+        stopping = false
+        return result
     }
+
 
     // MARK: - AudioDeviceManagerDelegate Implementation
 
@@ -1929,7 +1989,7 @@ class AudioStreamManager: NSObject, AudioDeviceManagerDelegate {
 
             // Get the string value from settings using the correct property name
             // The property in RecordingSettings likely matches the TS interface: deviceDisconnectionBehavior
-            let behaviorString = settings.deviceDisconnectionBehavior ?? "pause" // Use the correct property name
+            let behaviorString = settings.deviceDisconnectionBehavior.rawValue // Get the raw value from the enum
             let behavior = DeviceDisconnectionBehavior(rawValue: behaviorString) ?? .PAUSE // Convert to enum, default to .PAUSE
 
             Logger.debug("Recording device disconnected! Applying behavior: \(behavior.rawValue)")
@@ -2017,50 +2077,19 @@ class AudioStreamManager: NSObject, AudioDeviceManagerDelegate {
             // Additional forced reset of engine to ensure clean state
             audioEngine.reset()
             audioEngine.prepare()
-
-            // Create a counter for tracking buffers since fallback
-            var buffersSinceFallback = 0
             
-            // Create a specialized tap block for fallback with aggressive emission
+            // Create a simplified tap block for fallback - rely on processAudioBuffer for proper emission
             let fallbackTapBlock = { [weak self] (buffer: AVAudioPCMBuffer, time: AVAudioTime) -> Void in
                 guard let self = self, self.isRecording else { return }
                 
                 // Process the buffer and ensure it's written to file
-                self.processAudioBuffer(buffer)
+                self.processAudioBuffer(buffer, fileURL: self.recordingFileURL!)
                 self.lastBufferTime = time
-                
-                // Special handling for fallback: force emission regularly to restart flow
-                let audioData = buffer.audioBufferList.pointee.mBuffers
-                guard let bufferData = audioData.mData else { return }
-                
-                let dataToAdd = Data(bytes: bufferData, count: Int(audioData.mDataByteSize))
-                if !dataToAdd.isEmpty {
-                    // Force emission every few buffers regardless of timing during recovery period
-                    buffersSinceFallback += 1
-                    
-                    // MORE AGGRESSIVE: Force emission every 2 buffers for the first 30 buffers
-                    if buffersSinceFallback <= 30 && buffersSinceFallback % 2 == 0 {
-                        DispatchQueue.main.async {
-                            // Bypass normal timing checks to ensure data flows
-                            let recordingTime = self.currentRecordingDuration()
-                            let totalSize = self.totalDataSize // Make sure we use the current value
-                            Logger.debug("FALLBACK FORCE EMIT: Forcing emission after fallback (buffer #\(buffersSinceFallback), size: \(dataToAdd.count) bytes, totalSize: \(totalSize))")
-                            
-                            self.delegate?.audioStreamManager(
-                                self,
-                                didReceiveAudioData: dataToAdd,
-                                recordingTime: recordingTime,
-                                totalDataSize: totalSize,
-                                compressionInfo: nil
-                            )
-                        }
-                    }
-                }
             }
             
             // Use our shared tap installation method with the custom block
             _ = installTapWithHardwareFormat(customTapBlock: fallbackTapBlock)
-            Logger.debug("Fallback: Re-installed tap with enhanced emission handling")
+            Logger.debug("Fallback: Re-installed tap with simplified emission handling")
             
             // Force prepare engine again to ensure it's ready
             audioEngine.prepare()
@@ -2179,6 +2208,49 @@ class AudioStreamManager: NSObject, AudioDeviceManagerDelegate {
         }
     }
 
+    private func configureAudioSession(for settings: RecordingSettings) throws {
+        let session = AVAudioSession.sharedInstance()
+        
+        // Get base configuration from user settings or defaults
+        var category: AVAudioSession.Category = .playAndRecord
+        var mode: AVAudioSession.Mode = .default
+        var options: AVAudioSession.CategoryOptions = [.allowBluetooth, .mixWithOthers]
+        
+        if let audioSessionConfig = settings.ios?.audioSession {
+            category = audioSessionConfig.category
+            mode = audioSessionConfig.mode
+            options = audioSessionConfig.categoryOptions
+        }
+        
+        // Append necessary options for background recording if keepAwake is enabled
+        if settings.keepAwake {
+            Logger.debug("AudioStreamManager", "keepAwake enabled - configuring for background recording")
+            // Set the category to PlayAndRecord with proper background options
+            options.insert(.mixWithOthers)
+            // Add duckOthers to reduce volume of other apps instead of stopping them
+            options.insert(.duckOthers)
+            
+            // Configure audio session for background audio
+            do {
+                try session.setCategory(.playAndRecord, mode: .default, options: options)
+                try session.setActive(true, options: .notifyOthersOnDeactivation)
+                // Ensure the app has appropriate Info.plist settings for background audio
+                Logger.debug("AudioStreamManager", "Audio session configured for background recording with options: \(options)")
+            } catch {
+                Logger.debug("AudioStreamManager", "Failed to configure audio session for background: \(error)")
+                try session.setActive(true, options: .notifyOthersOnDeactivation)
+            }
+        } else {
+            Logger.debug("AudioStreamManager", "keepAwake disabled - using standard session configuration")
+            // If keepAwake is false, don't add background audio options
+            try session.setActive(true)
+        }
+        
+        // Apply the final configuration
+        try session.setCategory(category, mode: mode, options: options)
+        
+        Logger.debug("AudioStreamManager", "Audio session configured with category: \(category), mode: \(mode), options: \(options)")
+    }
 }
 
 extension AudioStreamManager: UNUserNotificationCenterDelegate {
@@ -2219,6 +2291,19 @@ extension AudioStreamManager: AVAudioRecorderDelegate {
         Logger.debug("Compressed recording finished - success: \(flag)")
         if !flag {
             delegate?.audioStreamManager(self, didFailWithError: "Compressed recording failed to complete")
+        } else {
+            // Update cached compressed file size when recording finishes
+            if let compressedURL = compressedFileURL {
+                do {
+                    let attributes = try FileManager.default.attributesOfItem(atPath: compressedURL.path)
+                    if let size = attributes[.size] as? Int64 {
+                        cachedCompressedFileSize = size
+                        Logger.debug("Cached compressed file size: \(size) bytes")
+                    }
+                } catch {
+                    Logger.debug("Failed to cache compressed file size: \(error)")
+                }
+            }
         }
     }
     

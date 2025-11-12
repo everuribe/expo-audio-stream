@@ -23,13 +23,15 @@ export interface RecordingConfig {
     sampleRate?: SampleRate // Sample rate for recording (16000, 44100, or 48000 Hz)
     channels?: 1 | 2 // Number of audio channels (1 for mono, 2 for stereo)
     encoding?: EncodingType // Encoding type for the recording (pcm_32bit, pcm_16bit, pcm_8bit)
-    interval?: number // Interval in milliseconds at which to emit recording data
+    interval?: number // Interval in milliseconds at which to emit recording data (minimum: 10ms)
+    intervalAnalysis?: number // Interval in milliseconds at which to emit analysis data (minimum: 10ms)
 
     // Device and notification settings
     keepAwake?: boolean // Continue recording when app is in background. On iOS, requires both 'audio' and 'processing' background modes (default is true)
     showNotification?: boolean // Show a notification during recording (default is false)
     showWaveformInNotification?: boolean // Show waveform in the notification (Android only)
     notification?: NotificationConfig // Configuration for the notification
+    audioFocusStrategy?: 'background' | 'interactive' | 'communication' | 'none' // Audio focus strategy for handling interruptions (Android)
 
     // Audio processing settings
     enableProcessing?: boolean // Enable audio processing (default is false)
@@ -41,14 +43,8 @@ export interface RecordingConfig {
     ios?: IOSConfig // iOS-specific configuration
     web?: WebConfig // Web-specific configuration
 
-    // Compression settings
-    compression?: {
-        enabled: boolean
-        format: 'aac' | 'opus'  // Available compression formats
-        bitrate?: number
-    }
-
     // Output configuration
+    output?: OutputConfig // Control which files are created during recording
     outputDirectory?: string // Custom directory for saving recordings (uses app default if not specified)
     filename?: string // Custom filename for the recording (uses UUID if not specified)
 
@@ -59,6 +55,9 @@ export interface RecordingConfig {
     // Callback functions
     onAudioStream?: (_: AudioDataEvent) => Promise<void> // Callback function to handle audio stream
     onAudioAnalysis?: (_: AudioAnalysisEvent) => Promise<void> // Callback function to handle audio features
+    
+    // Performance options
+    bufferDurationSeconds?: number // Buffer duration in seconds (controls audio buffer size)
 }
 
 ```
@@ -82,6 +81,40 @@ On iOS, the recording is managed using `AVAudioEngine` and related classes from 
 - Works reliably on both physical devices and simulators regardless of the requested sample rate
 - Supports both 16-bit and 32-bit PCM formats
 - Maintains audio quality through intermediate Float32 format when necessary
+
+## Event Emission Intervals
+
+The `interval` and `intervalAnalysis` options control how frequently audio data and analysis events are emitted during recording. Both have a minimum value of 10ms to ensure consistent behavior across platforms while preventing excessive CPU usage.
+
+### Performance Considerations
+
+| Interval | CPU Usage | Battery Impact | Use Case |
+|----------|-----------|----------------|----------|
+| 10-50ms | High | High | Real-time visualizations, live frequency analysis |
+| 50-100ms | Medium | Medium | Responsive UI updates, waveform display |
+| 100-500ms | Low | Low | Progress indicators, level meters |
+| 500ms+ | Very Low | Minimal | File size monitoring, duration tracking |
+
+### Best Practices
+
+1. **For real-time visualizations**: Use `intervalAnalysis: 10` with minimal features enabled
+2. **For general recording**: Use `interval: 100` or higher to balance responsiveness and performance
+3. **For battery-sensitive apps**: Use intervals of 500ms or higher
+4. **Platform considerations**: While both iOS and Android support 10ms intervals, actual performance may vary based on device capabilities
+
+Example configuration for real-time visualization:
+```tsx
+const realtimeConfig = {
+  intervalAnalysis: 10,      // 10ms for smooth updates
+  interval: 100,             // 100ms for data emission
+  enableProcessing: true,
+  features: {
+    fft: true,              // Only enable what you need
+    energy: false,
+    rms: false
+  }
+};
+```
 
 ## Platform Differences
 
@@ -310,17 +343,25 @@ await startRecording({
 - **Web**: The `storeUncompressedAudio` setting controls in-memory storage of PCM data
 - **iOS/Android**: This setting has no effect, as these platforms always write directly to files rather than storing in memory
 
-## Compression Settings {#compression-settings}
+## Output Configuration {#output-configuration}
 
-The library supports real-time audio compression alongside the raw PCM recording. This dual-stream approach allows you to capture both high-quality uncompressed audio and smaller compressed files simultaneously.
+The library provides flexible control over which audio files are created during recording. You can choose to save uncompressed WAV files, compressed audio files, both, or neither (for streaming-only scenarios).
 
-### Configuration Options
+> **⚠️ Breaking Change (Web)**: The web-specific `web.storeUncompressedAudio` option has been removed and replaced with `output.primary.enabled`. See the [Breaking Changes Guide](../../../docs/BREAKING_CHANGES_OUTPUT_CONFIG.md) for migration details.
+
+### Configuration Structure
 
 ```tsx
-compression: {
-    enabled: boolean      // Whether to enable compression
-    format: 'aac' | 'opus' // Compression format to use
-    bitrate?: number      // Optional bitrate in bits per second
+output?: {
+    primary?: {
+        enabled?: boolean    // Whether to create the primary WAV file (default: true)
+        format?: 'wav'       // Currently only 'wav' is supported
+    }
+    compressed?: {
+        enabled?: boolean    // Whether to create a compressed file (default: false)
+        format?: 'aac' | 'opus'  // Compression format
+        bitrate?: number     // Bitrate in bits per second (default: 128000)
+    }
 }
 ```
 
@@ -338,28 +379,64 @@ compression: {
   - Excellent for speech compression
   - Recommended bitrate: 16000-96000 bps
 
-### Example: Enabling Compression
+### Usage Examples
 
 ```tsx
 const { startRecording } = useAudioRecorder();
 
-// Configure recording with compression
+// Example 1: Default behavior - only primary WAV file
+await startRecording({
+  sampleRate: 44100,
+  channels: 1,
+  encoding: 'pcm_16bit'
+  // output is undefined, defaults to { primary: { enabled: true } }
+});
+
+// Example 2: Both WAV and compressed files
 await startRecording({
   sampleRate: 44100,
   channels: 1,
   encoding: 'pcm_16bit',
-  // Compression settings
-  compression: {
-    enabled: true,
-    format: 'aac',
-    bitrate: 128000 // 128 kbps
+  output: {
+    compressed: {
+      enabled: true,
+      format: 'aac',
+      bitrate: 128000 // 128 kbps
+    }
+    // primary is not specified, defaults to enabled
+  }
+});
+
+// Example 3: Only compressed file (no WAV)
+await startRecording({
+  sampleRate: 44100,
+  channels: 1,
+  output: {
+    primary: { enabled: false },
+    compressed: {
+      enabled: true,
+      format: 'opus',
+      bitrate: 64000 // 64 kbps
+    }
+  }
+});
+
+// Example 4: Streaming only (no files)
+await startRecording({
+  sampleRate: 16000,
+  channels: 1,
+  output: {
+    primary: { enabled: false }
+  },
+  onAudioStream: async (data) => {
+    // Process audio in real-time
   }
 });
 ```
 
-### Accessing Compressed Files
+### Accessing Output Files
 
-When recording with compression enabled, both the raw PCM file and the compressed file are available in the recording result:
+The recording result structure depends on which outputs were enabled:
 
 ```tsx
 const { stopRecording } = useAudioRecorder();
@@ -367,16 +444,24 @@ const { stopRecording } = useAudioRecorder();
 const handleStopRecording = async () => {
   const result = await stopRecording();
   
-  // Access the uncompressed WAV file
-  console.log('Uncompressed file:', result.fileUri);
-  console.log('Uncompressed size:', result.size, 'bytes');
+  // Primary WAV file (if enabled)
+  if (result.fileUri) {
+    console.log('Primary file:', result.fileUri);
+    console.log('Primary size:', result.size, 'bytes');
+    console.log('Format:', result.mimeType); // 'audio/wav'
+  }
   
-  // Access the compressed file
+  // Compressed file (if enabled)
   if (result.compression) {
     console.log('Compressed file:', result.compression.compressedFileUri);
     console.log('Compressed size:', result.compression.size, 'bytes');
     console.log('Compression format:', result.compression.format);
     console.log('Bitrate:', result.compression.bitrate, 'bps');
+  }
+  
+  // If no outputs were enabled (streaming only)
+  if (!result.fileUri && !result.compression) {
+    console.log('No files created - streaming only mode');
   }
 };
 ```
@@ -395,20 +480,22 @@ const handleStopRecording = async () => {
   - AAC support depends on browser
   - Data is stored in memory during recording unless `storeUncompressedAudio: false` is set
 
-### Streaming Compressed Audio
+### Streaming Audio Data
 
-You can also access the compressed audio data in real-time during recording using the `onAudioStream` callback:
+You can access both raw and compressed audio data in real-time during recording using the `onAudioStream` callback:
 
 ```tsx
 await startRecording({
   // ... other config options
-  compression: {
-    enabled: true,
-    format: 'opus',
-    bitrate: 64000
+  output: {
+    compressed: {
+      enabled: true,
+      format: 'opus',
+      bitrate: 64000
+    }
   },
   onAudioStream: async (event) => {
-    // Raw PCM audio data
+    // Raw PCM audio data (always available)
     console.log('Raw data size:', event.eventDataSize);
     
     // Compressed audio chunk (if compression is enabled)
@@ -421,6 +508,157 @@ await startRecording({
     }
   }
 });
+```
+
+## Buffer Duration Control {#buffer-duration}
+
+The `bufferDurationSeconds` option allows you to control the size of audio buffers used during recording. This affects both latency and CPU usage.
+
+### Configuration
+
+```tsx
+const config = {
+    bufferDurationSeconds: 0.1, // 100ms buffers
+    // ... other config options
+};
+```
+
+**Default Behavior**: When `bufferDurationSeconds` is not specified (undefined):
+- The library requests 1024 frames (platform default)
+- At 44.1kHz, this equals ~23ms
+- However, iOS enforces a minimum of ~0.1s (4800 frames at 48kHz)
+- Android and Web respect the 1024 frame default
+
+### Performance Trade-offs
+
+| Buffer Size | Latency | CPU Usage | Best For |
+|------------|---------|-----------|----------|
+| < 50ms | Very Low | High | Real-time processing, voice commands |
+| 50-200ms | Low-Medium | Medium | Balanced performance |
+| > 200ms | Higher | Low | Efficient recording, battery optimization |
+
+### Platform Behavior
+
+- **iOS**: Enforces a minimum buffer size of ~0.1 seconds (4800 frames at 48kHz). Smaller requests are automatically handled through buffer accumulation.
+- **Android**: Respects requested buffer sizes within hardware limits
+- **Web**: Fully configurable through Web Audio API
+
+### Example: Low-Latency Voice Detection
+
+```tsx
+await startRecording({
+    sampleRate: 16000,
+    channels: 1,
+    bufferDurationSeconds: 0.02, // Request 20ms buffers
+    output: {
+        primary: { enabled: false } // No file I/O for lower latency
+    },
+    onAudioStream: async (data) => {
+        // Process voice commands with minimal delay
+        const command = await detectVoiceCommand(data);
+        if (command) {
+            await handleCommand(command);
+        }
+    }
+});
+```
+
+## Streaming-Only Mode {#streaming-only}
+
+You can configure the library to stream audio data without creating any files on disk. This is ideal for real-time processing scenarios where you don't need to persist the audio.
+
+### Configuration
+
+```tsx
+const config = {
+    output: {
+        primary: { enabled: false }  // Disable all file creation
+    },
+    // ... other config options
+};
+```
+
+### Benefits
+
+- **Reduced I/O overhead**: No disk writes during recording
+- **Lower storage usage**: No temporary files created
+- **Better battery life**: Less system resource usage
+- **Improved performance**: All processing happens in memory
+
+### Important Notes
+
+- When no outputs are enabled, the recording result will have empty `fileUri` and no `compression` object
+- Audio data is only available through the `onAudioStream` callback
+- You must implement `onAudioStream` to capture the audio data
+
+### Example: Real-Time Transcription
+
+```tsx
+const transcriptionService = new TranscriptionService();
+
+await startRecording({
+    sampleRate: 16000,
+    channels: 1,
+    bufferDurationSeconds: 0.05, // 50ms chunks
+    output: {
+        primary: { enabled: false }  // No files needed
+    },
+    onAudioStream: async (data) => {
+        // Send audio directly to transcription service
+        const transcript = await transcriptionService.process(data);
+        updateTranscriptUI(transcript);
+    }
+});
+
+// When stopping, no files will be returned
+const result = await stopRecording();
+console.log(result.fileUri); // Will be undefined
+console.log(result.compression); // Will be undefined
+```
+
+### Example: Live Streaming to Server
+
+```tsx
+const websocket = new WebSocket('wss://audio-server.com/stream');
+
+await startRecording({
+    sampleRate: 44100,
+    channels: 2,
+    bufferDurationSeconds: 0.1, // 100ms chunks for network efficiency
+    output: {
+        primary: { enabled: false }  // Stream only
+    },
+    onAudioStream: async (data) => {
+        if (websocket.readyState === WebSocket.OPEN) {
+            // Stream audio data to server
+            websocket.send(data.data);
+        }
+    }
+});
+```
+
+### Combining with Buffer Duration
+
+These options work well together for optimizing streaming scenarios:
+
+```tsx
+// Ultra-low latency configuration
+const lowLatencyConfig = {
+    bufferDurationSeconds: 0.01, // 10ms (will use 100ms on iOS)
+    output: {
+        primary: { enabled: false }  // No file I/O
+    },
+    // ... other options
+};
+
+// Efficient streaming configuration
+const efficientStreamingConfig = {
+    bufferDurationSeconds: 0.2, // 200ms for network efficiency
+    output: {
+        primary: { enabled: false }  // Stream only
+    },
+    // ... other options
+};
 ```
 
 ## Example Usage
@@ -436,15 +674,18 @@ const config = {
     enableProcessing: true,
     keepAwake: true,
     showNotification: true,
-    compression: {
-        enabled: true,
-        format: 'aac',
-        bitrate: 128000
+    output: {
+        compressed: {
+            enabled: true,
+            format: 'aac',
+            bitrate: 128000
+        }
     },
     pointsPerSecond: 1000,
     algorithm: 'rms',
     features: { energy: true, rms: true },
     autoResumeAfterInterruption: true,
+    audioFocusStrategy: 'background', // Continue recording through interruptions
     onAudioStream: async (event) => {
         console.log('Audio data:', event);
     },
@@ -541,6 +782,84 @@ const config = {
   - Interruptions are handled through the Web Audio API's state changes
   - Phone call handling is not supported
 
+## Audio Focus Strategy (Android)
+
+The `audioFocusStrategy` option controls how your app handles audio focus changes on Android. This affects how recording behaves when other apps want to play audio or when the user interacts with system audio controls.
+
+### Available Strategies
+
+- **`'background'`** (default when `keepAwake: true`): Continue recording when app loses focus
+  - Best for: Voice recorders, transcription apps, meeting recording
+  - Behavior: Recording continues even when other apps play audio
+  - Use case: Long-term recording where interruptions should not stop recording
+
+- **`'interactive'`** (default when `keepAwake: false`): Pause when losing focus, resume when gaining
+  - Best for: Music apps, games, interactive audio apps
+  - Behavior: Automatically pauses recording when another app needs audio focus
+  - Use case: User-interactive recording where interruptions should pause recording
+
+- **`'communication'`**: Maintain priority for real-time communication
+  - Best for: Video calls, voice chat, live streaming
+  - Behavior: Requests exclusive audio access with high priority
+  - Use case: Real-time communication where audio quality is critical
+
+- **`'none'`**: No automatic audio focus management
+  - Best for: Custom handling scenarios
+  - Behavior: Your app handles all audio focus changes manually
+  - Use case: When you need complete control over audio focus behavior
+
+### Default Behavior
+
+The library automatically selects an appropriate strategy based on your configuration:
+- When `keepAwake: true` → defaults to `'background'`
+- When `keepAwake: false` → defaults to `'interactive'`
+
+### Configuration Examples
+
+```tsx
+// Long-term recording (voice recorder, meeting recording)
+const voiceRecorderConfig = {
+  keepAwake: true,
+  audioFocusStrategy: 'background', // Continue recording through interruptions
+  autoResumeAfterInterruption: true,
+  // ... other config
+};
+
+// Interactive recording (music app, game)
+const interactiveConfig = {
+  keepAwake: false,
+  audioFocusStrategy: 'interactive', // Pause on interruptions
+  autoResumeAfterInterruption: true,
+  // ... other config
+};
+
+// Real-time communication (video call, voice chat)
+const communicationConfig = {
+  sampleRate: 16000, // Optimized for speech
+  audioFocusStrategy: 'communication', // High priority audio access
+  autoResumeAfterInterruption: false, // Manual handling for communication apps
+  // ... other config
+};
+
+// Custom audio focus handling
+const customConfig = {
+  audioFocusStrategy: 'none', // No automatic handling
+  onRecordingInterrupted: (event) => {
+    // Implement custom logic for audio focus changes
+    if (event.reason === 'audioFocusLoss') {
+      // Handle focus loss manually
+    }
+  },
+  // ... other config
+};
+```
+
+### Platform Notes
+
+- **Android**: Full support for all audio focus strategies
+- **iOS**: This option has no effect on iOS (audio session management is handled differently)
+- **Web**: This option has no effect on web platforms
+
 ## Background Recording on iOS
 
 When setting `keepAwake: true` for iOS background recording:
@@ -598,15 +917,18 @@ const config = {
     enableProcessing: true,
     keepAwake: true,
     showNotification: true,
-    compression: {
-        enabled: true,
-        format: 'aac',
-        bitrate: 128000
+    output: {
+        compressed: {
+            enabled: true,
+            format: 'aac',
+            bitrate: 128000
+        }
     },
     pointsPerSecond: 1000,
     algorithm: 'rms',
     features: { energy: true, rms: true },
     autoResumeAfterInterruption: true,
+    audioFocusStrategy: 'background', // Continue recording through interruptions
     onAudioStream: async (event) => {
         console.log('Audio data:', event);
     },

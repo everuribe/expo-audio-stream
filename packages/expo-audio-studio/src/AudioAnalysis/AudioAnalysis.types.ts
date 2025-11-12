@@ -108,7 +108,21 @@ export interface DataPoint {
 export interface AudioAnalysis {
     segmentDurationMs: number // Duration of each segment in milliseconds
     durationMs: number // Duration of the audio in milliseconds
-    bitDepth: number // Bit depth of the audio
+    /**
+     * Bit depth used for audio analysis processing.
+     *
+     * **Important**: This represents the internal processing bit depth, which may differ
+     * from the recording bit depth. Audio is typically converted to 32-bit float for
+     * analysis to ensure precision in calculations, regardless of the original recording format.
+     *
+     * Platform behavior:
+     * - iOS: Always 32 (float processing)
+     * - Android: Always 32 (float processing)
+     * - Web: Always 32 (Web Audio API standard)
+     *
+     * The actual recorded file will maintain the requested bit depth (8, 16, or 32).
+     */
+    bitDepth: number
     samples: number // Size of the audio in bytes
     numberOfChannels: number // Number of audio channels
     sampleRate: number // Sample rate of the audio
@@ -121,6 +135,7 @@ export interface AudioAnalysis {
         min: number
         max: number
     }
+    extractionTimeMs: number // Time taken to extract/process the analysis in milliseconds
     // TODO: speaker changes into a broader speech analysis section
     speechAnalysis?: {
         speakerChanges: {

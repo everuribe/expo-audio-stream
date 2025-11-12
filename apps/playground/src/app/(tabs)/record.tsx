@@ -26,7 +26,9 @@ import type {
     RecordingConfig,
     StartRecordingResult,
     TranscriberData,
-    AudioDevice } from '@siteed/expo-audio-studio'
+    AudioDevice,
+    RecordingInterruptionEvent,
+} from '@siteed/expo-audio-studio'
 import {
     ExpoAudioStreamModule,
     useSharedAudioRecorder,
@@ -51,7 +53,8 @@ import { isWeb } from '../../utils/utils'
 
 import type { TranscriptionModeSettings } from '../../component/TranscriptionModeConfig'
 
-const CHUNK_DURATION_MS = 500 // 500 ms chunks
+const CHUNK_DURATION_MS = 5000 // 5000 ms chunks
+const ANALYSIS_INTERVAL_MS = 500 // 500 ms chunks
 const MAX_AUDIO_BUFFER_LENGTH = 48000 * 5 // 5 seconds of audio at 48kHz
 
 const logger = baseLogger.extend('RecordScreen')
@@ -61,17 +64,20 @@ const baseRecordingConfig: RecordingConfig = {
     interval: CHUNK_DURATION_MS,
     sampleRate: WhisperSampleRate,
     keepAwake: true,
-    intervalAnalysis: CHUNK_DURATION_MS,
+    intervalAnalysis: ANALYSIS_INTERVAL_MS,
     showNotification: Platform.OS === 'ios' ? false : true,
     showWaveformInNotification: true,
     encoding: 'pcm_32bit',
     segmentDurationMs: 100,
     enableProcessing: true,
     features: undefined,
-    compression: {
-        enabled: true,
-        format: Platform.OS === 'ios' ? 'aac' : 'opus',
-        bitrate: DEFAULT_BITRATE,
+    output: {
+        primary: { enabled: true },
+        compressed: {
+            enabled: true,
+            format: Platform.OS === 'ios' ? 'aac' : 'opus',
+            bitrate: DEFAULT_BITRATE,
+        },
     },
     autoResumeAfterInterruption: true,
     deviceDisconnectionBehavior: 'fallback',
@@ -249,7 +255,7 @@ export default function RecordScreen() {
         resumeRecording,
         prepareRecording,
         isPaused,
-        durationMs: duration,
+        durationMs,
         size,
         compression,
         isRecording,
@@ -495,8 +501,8 @@ export default function RecordScreen() {
                 deviceId: startRecordingConfig.deviceId,
                 // Android needs to reinitialize when sample rate changes
                 ...(Platform.OS === 'android' ? { sampleRate: startRecordingConfig.sampleRate } : {}),
-                // Store the entire compression object
-                compression: startRecordingConfig.compression,
+                // Store the entire output object
+                output: startRecordingConfig.output,
                 filename: customFileName,
                 directory: defaultDirectory,
                 ios: startRecordingConfig.ios,
@@ -522,8 +528,6 @@ export default function RecordScreen() {
         }
     }, [defaultDirectory, requestPermissions, customFileName, startRecordingConfig, prepareRecording, show])
 
-    // Now define the useEffect that depends on handlePrepareRecording
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- Using conditional dependencies based on platform
     useEffect(() => {
         if (!isRecordingPrepared || isRecording || isPaused) return
         
@@ -533,8 +537,8 @@ export default function RecordScreen() {
             deviceId: startRecordingConfig.deviceId,
             // Android needs to reinitialize when sample rate changes
             ...(Platform.OS === 'android' ? { sampleRate: startRecordingConfig.sampleRate } : {}),
-            // Compression settings - on both platforms this affects recorder initialization
-            compression: startRecordingConfig.compression,  // Include the entire compression object
+            // Output settings - on both platforms this affects recorder initialization
+            output: startRecordingConfig.output,  // Include the entire output object
             // Storage settings
             filename: customFileName,
             directory: defaultDirectory,
@@ -552,12 +556,13 @@ export default function RecordScreen() {
                 if (oldConfig.deviceId !== newConfig.deviceId) changes.push('input device')
                 if (Platform.OS === 'android' && oldConfig.sampleRate !== newConfig.sampleRate) changes.push('sample rate')
                 
-                // Better compression change detection
-                const oldCompression = oldConfig.compression || {}
-                const newCompression = newConfig.compression || {}
-                if (oldCompression.enabled !== newCompression.enabled) changes.push('compression enabled')
-                if (oldCompression.format !== newCompression.format) changes.push('compression format')
-                if (oldCompression.bitrate !== newCompression.bitrate) changes.push('compression bitrate')
+                // Better output change detection
+                const oldOutput = oldConfig.output || {}
+                const newOutput = newConfig.output || {}
+                if (oldOutput.primary?.enabled !== newOutput.primary?.enabled) changes.push('primary output')
+                if (oldOutput.compressed?.enabled !== newOutput.compressed?.enabled) changes.push('compressed output enabled')
+                if (oldOutput.compressed?.format !== newOutput.compressed?.format) changes.push('compressed format')
+                if (oldOutput.compressed?.bitrate !== newOutput.compressed?.bitrate) changes.push('compressed bitrate')
                 
                 if (oldConfig.filename !== newConfig.filename) changes.push('filename')
                 if (oldConfig.directory !== newConfig.directory) changes.push('directory')
@@ -577,7 +582,7 @@ export default function RecordScreen() {
     }, [
         startRecordingConfig.deviceId,
         startRecordingConfig.sampleRate,
-        startRecordingConfig.compression,  
+        startRecordingConfig.output,  
         startRecordingConfig.ios, 
         customFileName, 
         defaultDirectory, 
@@ -710,6 +715,28 @@ export default function RecordScreen() {
                 ...startRecordingConfig,
                 filename: finalFileName || undefined,
                 outputDirectory: !isWeb ? defaultDirectory : undefined,
+                // Override the interruption callback to add toast notifications
+                onRecordingInterrupted: (event: RecordingInterruptionEvent) => {
+                    logger.warn('Recording interrupted', event)
+                    
+                    // Call the original callback if it exists
+                    if (startRecordingConfig.onRecordingInterrupted) {
+                        startRecordingConfig.onRecordingInterrupted(event)
+                    }
+                    
+                    // Add toast notifications
+                    if (event.reason === 'deviceDisconnected') {
+                        show({
+                            type: 'warning',
+                            message: `Device disconnected`,
+                        })
+                    } else if (event.reason === 'deviceConnected' || event.reason === 'deviceFallback') {
+                        show({
+                            type: 'info',
+                            message: `Device event: ${event.reason}`,
+                        })
+                    }
+                },
             }
 
             logger.debug(`Starting recording with config:`, finalConfig)
@@ -927,7 +954,7 @@ export default function RecordScreen() {
                 />
             )}
             <RecordingStats
-                duration={duration}
+                duration={durationMs}
                 size={size}
                 sampleRate={streamConfig?.sampleRate}
                 bitDepth={streamConfig?.bitDepth}
@@ -977,7 +1004,7 @@ style={{
                 liveWebAudio && (
                     <LiveTranscriber
                         transcripts={transcripts}
-                        duration={duration}
+                        duration={durationMs}
                         activeTranscript={activeTranscript?.text ?? ''}
                         sampleRate={
                             startRecordingConfig.sampleRate ?? WhisperSampleRate
@@ -1039,7 +1066,7 @@ style={{
                 />
             )}
             <RecordingStats
-                duration={duration}
+                duration={durationMs}
                 size={size}
                 sampleRate={streamConfig?.sampleRate}
                 bitDepth={streamConfig?.bitDepth}

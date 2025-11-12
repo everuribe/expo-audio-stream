@@ -8,6 +8,131 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 
+## [2.18.1] - 2025-08-02
+### Changed
+- feat: improved memory monitoring ([55dfe16](https://github.com/deeeed/expo-audio-stream/commit/55dfe16d7e8c372392738d1441776a760e7ecdbe))
+- chore(expo-audio-studio): release @siteed/expo-audio-studio@2.18.0 ([cc80ac5](https://github.com/deeeed/expo-audio-stream/commit/cc80ac5fa7ece05fc9fae031f101163acce2aff4))
+## [2.18.0] - 2025-08-01
+### Changed
+- feat(expo-audio-studio): optimize buffer size on android to prevent oom ([32fcb9b](https://github.com/deeeed/expo-audio-stream/commit/32fcb9b0a965669b3a37c9860998ae46a1d26cd8))
+- fix(expo-audio-studio): invalid paused duration on android ([c107258](https://github.com/deeeed/expo-audio-stream/commit/c107258054ebdbc733298c84b8d84b0f9f416e6e))
+- chore(expo-audio-studio): release @siteed/expo-audio-studio@2.17.0 ([8a303b4](https://github.com/deeeed/expo-audio-stream/commit/8a303b4d96988b97604123d74daaa406d9ec517c))
+## [2.17.0] - 2025-07-31
+### Changed
+- fix(expo-audio-studio): fix OutOfMemoryError by tracking stream position correctly ([b67e521](https://github.com/deeeed/expo-audio-stream/commit/b67e52142154d07873c5c1ec9c183d524d61e528))
+- chore(expo-audio-studio): release @siteed/expo-audio-studio@2.16.2 ([c4291a8](https://github.com/deeeed/expo-audio-stream/commit/c4291a82cc740b4d4790c69ae7e7cc07f1e8fb1a))
+## [2.16.2] - 2025-07-27
+### Changed
+- chore(expo-audio-studio): release @siteed/expo-audio-studio@2.16.1 ([c9614d4](https://github.com/deeeed/expo-audio-stream/commit/c9614d4ebf87d73c3c5b2f7d6e60492fd5e45e64))
+## [2.16.1] - 2025-07-27
+### Changed
+-  fix(expo-audio-studio): fix Android audio analysis accumulation showing 0 bytes ([012d478](https://github.com/deeeed/expo-audio-stream/commit/012d478c372db12b9fcf4a49f567d6618eb499f1))
+- chore(expo-audio-studio): release @siteed/expo-audio-studio@2.16.0 ([34c8c0f](https://github.com/deeeed/expo-audio-stream/commit/34c8c0f2f587ecde9adf97c539289b128f0bccc1))
+## [2.16.0] - 2025-07-27
+### Changed
+- feat(expo-audio-studio): optimize stop recording performance for long recording on android ([4553dc9](https://github.com/deeeed/expo-audio-stream/commit/4553dc9d2bd101a461f3f2eadfed63114f7d1b22))
+- chore(expo-audio-studio): release @siteed/expo-audio-studio@2.15.0 ([1af374a](https://github.com/deeeed/expo-audio-stream/commit/1af374ada18ec2cd4edeb151fc0e91e54f783b9e))
+## [2.15.0] - 2025-07-15
+### Changed
+- feat(android): add showPauseResumeActions option to notification config ([7456153](https://github.com/deeeed/expo-audio-stream/commit/7456153beb3f5041bd0199595b29d6b62c6b4c8f))
+- chore(expo-audio-studio): release @siteed/expo-audio-studio@2.14.9 ([34ea510](https://github.com/deeeed/expo-audio-stream/commit/34ea5104fe661743627b2234f95382ba6980a44c))
+## [2.14.9] - 2025-07-15
+### Changed
+- chore(expo-audio-studio): release @siteed/expo-audio-studio@2.14.8 ([4598073](https://github.com/deeeed/expo-audio-stream/commit/4598073062e05139bfa7d9ed80896c90359f0e18))
+## [2.14.8] - 2025-07-15
+### Changed
+- chore(expo-audio-studio): release @siteed/expo-audio-studio@2.14.7 ([93c5a53](https://github.com/deeeed/expo-audio-stream/commit/93c5a53822b9115f0b3647e833320b5c7a6bd03f))
+## [2.14.7] - 2025-07-15
+### Changed
+- chore(expo-audio-studio): release @siteed/expo-audio-studio@2.14.6 ([829a70e](https://github.com/deeeed/expo-audio-stream/commit/829a70e0ff8e077aa77197387f3a0b285e846fcd))
+## [2.14.6] - 2025-07-15
+### Changed
+- chore(expo-audio-studio): release @siteed/expo-audio-studio@2.14.5 ([ee7e3ce](https://github.com/deeeed/expo-audio-stream/commit/ee7e3ce39696c8a806574a858473dd664d5ac435))
+## [2.14.5] - 2025-07-15
+### Changed
+- chore(expo-audio-studio): release @siteed/expo-audio-studio@2.14.4 ([44848d7](https://github.com/deeeed/expo-audio-stream/commit/44848d7a0f62dcc2dd2fa6165dbe0ce965f95254))
+## [2.14.4] - 2025-07-15
+### Changed
+-  fix(plugin): respect enableDeviceDetection configuration for Android permissions ([32647c8](https://github.com/deeeed/expo-audio-stream/commit/32647c8d80bd33406f7dcabcf2823beaf3ba3b62))
+- fix(audio-studio): add missing Bluetooth_ADMIN permission for device detection ([5a56900](https://github.com/deeeed/expo-audio-stream/commit/5a5690025a3c2ac279b853e21470015935b9a469))
+## [2.14.3] - 2025-06-12
+### Changed
+- refactor(AudioRecorderManager): remove analysis bit depth logging for cleaner debug output ([ddaf9e2](https://github.com/deeeed/expo-audio-stream/commit/ddaf9e25c0bf9bad1e3435b9ec08b3b4a27a6161))
+## [2.14.2] - 2025-06-11
+### Changed
+- fix(ios): update compressed file size when primary output is disabled ([9f03ee0](https://github.com/deeeed/expo-audio-stream/commit/9f03ee0b18f1c079e5aaf13267e19f095ad3b7ea))
+- feat(expo-audio-studio): add platform limitations validation and documentation ([7e062ff](https://github.com/deeeed/expo-audio-stream/commit/7e062ff837865b735f0cabdb9e2b755ce55a94c6))
+- docs: reorg ([0251063](https://github.com/deeeed/expo-audio-stream/commit/0251063893c6464ec6410ec6e08866e12d3113a7))
+## [2.14.1] - 2025-06-11
+### Changed
+- fix(android): Fix duration returning 0 when primary output is disabled (#244) ([38d6f50](https://github.com/deeeed/expo-audio-stream/commit/38d6f50c084a10329be33a0f1c123aa9f457c371))
+## [2.14.0] - 2025-06-11
+### Changed
+- feat(expo-audio-studio): comprehensive cross-platform stop recording performance optimization ([b3ed474](https://github.com/deeeed/expo-audio-stream/commit/b3ed474d91994698fe082354621adc98e758557e))
+## [2.13.2] - 2025-06-10
+### Changed
+- fix: invalid type exports ([18340ea](https://github.com/deeeed/expo-audio-stream/commit/18340eac9cfef39691637400fc6af811d5b004df))
+- chore(expo-audio-studio): release @siteed/expo-audio-studio@2.13.1 ([9ccce85](https://github.com/deeeed/expo-audio-stream/commit/9ccce858174254387aac44d30853c908707d8254))
+## [2.13.1] - 2025-06-09
+### Changed
+- feat(investigation): resolve Issue #251 - comprehensive sub-100ms audio events analysis (#270) ([4813f1e](https://github.com/deeeed/expo-audio-stream/commit/4813f1ef05f3856b58ec8fde95b7b8909feb513d))
+- fix(deps): update expo-modules-core peer dependency for Expo SDK 53 compatibility ([40b946f](https://github.com/deeeed/expo-audio-stream/commit/40b946f83eecd3fdcedfe7a2cbac62f1207a4ff0))
+- docs: updated docs site ([8a01a97](https://github.com/deeeed/expo-audio-stream/commit/8a01a97ebee927a2dfa0a7cb40b11329410509d2))
+## [2.13.0] - 2025-06-09
+### Changed
+- feat(expo-audio-studio): enhance device detection and management system ([97ceef0](https://github.com/deeeed/expo-audio-stream/commit/97ceef003ddb8eb5246cda8a5a00ddc75bf665a0))
+## [2.12.3] - 2025-06-07
+### Changed
+- refactor(expo-audio-studio): adjust audio focus request timing in AudioRecorderManager ([317367c](https://github.com/deeeed/expo-audio-stream/commit/317367cb29fa09016aa73884f2f51e9cfdee1086))
+- chore(expo-audio-studio): release @siteed/expo-audio-studio@2.12.2 ([14db4eb](https://github.com/deeeed/expo-audio-stream/commit/14db4ebfdeb9181e82e810d61283738d41c40a1a))
+## [2.12.2] - 2025-06-07
+### Changed
+- fix: audio focus strategy implementation for Android background recording (#267) ([5b7b7ed](https://github.com/deeeed/expo-audio-stream/commit/5b7b7eda86bbd65becbe6bab44a44cdf6a1fb17d))
+## [2.12.1] - 2025-06-07
+### Changed
+- feat(playground): implement agent validation framework and enhance testing capabilities (#266) ([e7937e0](https://github.com/deeeed/expo-audio-stream/commit/e7937e0268f54f85ea2e0171b221f7ef29cc6248))
+## [2.12.0] - 2025-06-07
+### Changed
+- fix(android): resolve PCM streaming duration calculation bug (Issue #263) (#265) ([a0c5500](https://github.com/deeeed/expo-audio-stream/commit/a0c550099fec9d6b0d486440819173d9d9275908))
+- feat(expo-audio-studio): implement Android-only audioFocusStrategy (#264) ([cc77226](https://github.com/deeeed/expo-audio-stream/commit/cc7722605a5502a58b8236b610c9bdccf5f7f561))
+- docs: fix comment formatting in OutputConfig interface for clarity ([07fac61](https://github.com/deeeed/expo-audio-stream/commit/07fac61245843c601709bb7576db6e48b2106cf7))
+## [2.11.0] - 2025-06-05
+### Changed
+- refactor(expo-audio-studio): remove android/build.gradle and add device disconnection fallback tests ([36fe9a9](https://github.com/deeeed/expo-audio-stream/commit/36fe9a921505e136ea50406d4b664c597293ffd8))
+- fix(expo-audio-studio): enforce 10ms minimum interval on both platforms (#262) ([035fc07](https://github.com/deeeed/expo-audio-stream/commit/035fc076334c169a2371527bad0ca60f222d10ee))
+- fix(expo-audio-studio): add proper MediaCodec resource cleanup in AudioProcessor ([2b069b6](https://github.com/deeeed/expo-audio-stream/commit/2b069b6ae512f97fae80df1b8cb38bb3a14538e5))
+- feat(expo-audio-studio): add audio format enhancement specification and tests ([ace22a2](https://github.com/deeeed/expo-audio-stream/commit/ace22a22cf6c94ec58ddd4f6cb44f77dd383d6bc))
+- feat\!: Add M4A support with preferRawStream option (#261) ([c9faeb0](https://github.com/deeeed/expo-audio-stream/commit/c9faeb01cd5dcd7407f73a0f7e6d5822adb862a4))
+## [2.10.6] - 2025-06-04
+### Changed
+- fix(expo-audio-studio): prevent durationMs returning 0 on iOS (#244) (#260) ([595e5d5](https://github.com/deeeed/expo-audio-stream/commit/595e5d56991c9fa88c2fa4e39efb197916cb8b84))
+- chore(expo-audio-studio): release @siteed/expo-audio-studio@2.10.5 ([d8c6e1d](https://github.com/deeeed/expo-audio-stream/commit/d8c6e1de72ccb0c8885a4f5f3326e3229d9dfd92))
+## [2.10.5] - 2025-06-04
+### Changed
+- fix(expo-audio-studio): enable audio streaming when primary output is disabled on iOS (#259) ([1d2bb92](https://github.com/deeeed/expo-audio-stream/commit/1d2bb9280e7d596ed77de30b37e043fd7f8f8cc8))
+- chore(expo-audio-studio): release @siteed/expo-audio-studio@2.10.4 ([32f8c9e](https://github.com/deeeed/expo-audio-stream/commit/32f8c9ee1d65f52370798654be389de1569e851f))
+## [2.10.4] - 2025-06-03
+### Changed
+- fix(expo-audio-studio): resolve Swift compilation scope error in AudioStreamManager (#256) ([b44bf3d](https://github.com/deeeed/expo-audio-stream/commit/b44bf3d6d85a3f953d84b024bba828163354a40b))
+- chore(expo-audio-studio): release @siteed/expo-audio-studio@2.10.3 ([5e23474](https://github.com/deeeed/expo-audio-stream/commit/5e23474f9d0b0bcf643098b85779d413d0dc9348))
+## [2.10.3] - 2025-06-02
+### Changed
+- fix: prevent UninitializedPropertyAccessException crash in developer menu (#250) ([83c1fd7](https://github.com/deeeed/expo-audio-stream/commit/83c1fd75c9aa022eab1125df251700e3e87c4371))
+- fix: return compression info when primary output is disabled (issue #244) (#249) ([31d97c1](https://github.com/deeeed/expo-audio-stream/commit/31d97c1f7602aaf62969d26cc2fc2b7984ab24cc))
+## [2.10.2] - 2025-05-31
+### Changed
+- fix: Buffer size calculation and document duplicate emission fix for … (#248) ([204dde5](https://github.com/deeeed/expo-audio-stream/commit/204dde5137620e80c9a22a5a27a395a2149f33f0))
+- chore(expo-audio-studio): release @siteed/expo-audio-studio@2.10.1 ([0acbfc5](https://github.com/deeeed/expo-audio-stream/commit/0acbfc5b145b478cc913baf7fd798573d8c2f305))
+## [2.10.1] - 2025-05-27
+### Changed
+- fix(useAudioRecorder): update intervalId type for better type safety ([dc0021a](https://github.com/deeeed/expo-audio-stream/commit/dc0021ae0dc2b1e31f61c1340529b655f85447fc))
+- chore(expo-audio-studio): release @siteed/expo-audio-studio@2.10.0 ([bb8418f](https://github.com/deeeed/expo-audio-stream/commit/bb8418f2156d531377247a6d4095112560ff975f))
+## [2.10.0] - 2025-05-26
+### Changed
+- chore(expo-audio-studio): update @siteed/design-system to version 0.51.0 and refactor recording configuration (#245) ([6486c66](https://github.com/deeeed/expo-audio-stream/commit/6486c66d687093b5257fddcce575d932b6a6443b))
+- feat(expo-audio-studio): add buffer duration control and skip file writing options ([bfdbcb8](https://github.com/deeeed/expo-audio-stream/commit/bfdbcb8bac7c0641d6bacfa9b6fc4e64c2621baa))
+- docs: enhance contribution guidelines with Test-Driven Development practices ([2c04eff](https://github.com/deeeed/expo-audio-stream/commit/2c04eff1f6d6d3c567aad8f7d7174b7f1ad533aa))
+- feat(expo-audio-studio): enhance testing framework and add instrumented tests (#242) ([6e823ec](https://github.com/deeeed/expo-audio-stream/commit/6e823ec79c77ff34441b5acf757fdbac0a974e46))
 ## [2.9.0] - 2025-05-15
 ### Changed
 - refactor(WebRecorder): remove unused compression logic and clean up blob creation ([91f6bba](https://github.com/deeeed/expo-audio-stream/commit/91f6bba6a3afa9fe71811c2c67a5703b8751830c))
@@ -252,7 +377,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Feature: Audio features extraction during recording.
 - Feature: Consistent WAV PCM recording format across all platforms.
 
-[unreleased]: https://github.com/deeeed/expo-audio-stream/compare/@siteed/expo-audio-studio@2.9.0...HEAD
+[unreleased]: https://github.com/deeeed/expo-audio-stream/compare/@siteed/expo-audio-studio@2.18.1...HEAD
+[2.18.1]: https://github.com/deeeed/expo-audio-stream/compare/@siteed/expo-audio-studio@2.18.0...@siteed/expo-audio-studio@2.18.1
+[2.18.0]: https://github.com/deeeed/expo-audio-stream/compare/@siteed/expo-audio-studio@2.17.0...@siteed/expo-audio-studio@2.18.0
+[2.17.0]: https://github.com/deeeed/expo-audio-stream/compare/@siteed/expo-audio-studio@2.16.2...@siteed/expo-audio-studio@2.17.0
+[2.16.2]: https://github.com/deeeed/expo-audio-stream/compare/@siteed/expo-audio-studio@2.16.1...@siteed/expo-audio-studio@2.16.2
+[2.16.1]: https://github.com/deeeed/expo-audio-stream/compare/@siteed/expo-audio-studio@2.16.0...@siteed/expo-audio-studio@2.16.1
+[2.16.0]: https://github.com/deeeed/expo-audio-stream/compare/@siteed/expo-audio-studio@2.15.0...@siteed/expo-audio-studio@2.16.0
+[2.15.0]: https://github.com/deeeed/expo-audio-stream/compare/@siteed/expo-audio-studio@2.14.9...@siteed/expo-audio-studio@2.15.0
+[2.14.9]: https://github.com/deeeed/expo-audio-stream/compare/@siteed/expo-audio-studio@2.14.8...@siteed/expo-audio-studio@2.14.9
+[2.14.8]: https://github.com/deeeed/expo-audio-stream/compare/@siteed/expo-audio-studio@2.14.7...@siteed/expo-audio-studio@2.14.8
+[2.14.7]: https://github.com/deeeed/expo-audio-stream/compare/@siteed/expo-audio-studio@2.14.6...@siteed/expo-audio-studio@2.14.7
+[2.14.6]: https://github.com/deeeed/expo-audio-stream/compare/@siteed/expo-audio-studio@2.14.5...@siteed/expo-audio-studio@2.14.6
+[2.14.5]: https://github.com/deeeed/expo-audio-stream/compare/@siteed/expo-audio-studio@2.14.4...@siteed/expo-audio-studio@2.14.5
+[2.14.4]: https://github.com/deeeed/expo-audio-stream/compare/@siteed/expo-audio-studio@2.14.3...@siteed/expo-audio-studio@2.14.4
+[2.14.3]: https://github.com/deeeed/expo-audio-stream/compare/@siteed/expo-audio-studio@2.14.2...@siteed/expo-audio-studio@2.14.3
+[2.14.2]: https://github.com/deeeed/expo-audio-stream/compare/@siteed/expo-audio-studio@2.14.1...@siteed/expo-audio-studio@2.14.2
+[2.14.1]: https://github.com/deeeed/expo-audio-stream/compare/@siteed/expo-audio-studio@2.14.0...@siteed/expo-audio-studio@2.14.1
+[2.14.0]: https://github.com/deeeed/expo-audio-stream/compare/@siteed/expo-audio-studio@2.13.2...@siteed/expo-audio-studio@2.14.0
+[2.13.2]: https://github.com/deeeed/expo-audio-stream/compare/@siteed/expo-audio-studio@2.13.1...@siteed/expo-audio-studio@2.13.2
+[2.13.1]: https://github.com/deeeed/expo-audio-stream/compare/@siteed/expo-audio-studio@2.13.0...@siteed/expo-audio-studio@2.13.1
+[2.13.0]: https://github.com/deeeed/expo-audio-stream/compare/@siteed/expo-audio-studio@2.12.3...@siteed/expo-audio-studio@2.13.0
+[2.12.3]: https://github.com/deeeed/expo-audio-stream/compare/@siteed/expo-audio-studio@2.12.2...@siteed/expo-audio-studio@2.12.3
+[2.12.2]: https://github.com/deeeed/expo-audio-stream/compare/@siteed/expo-audio-studio@2.12.1...@siteed/expo-audio-studio@2.12.2
+[2.12.1]: https://github.com/deeeed/expo-audio-stream/compare/@siteed/expo-audio-studio@2.12.0...@siteed/expo-audio-studio@2.12.1
+[2.12.0]: https://github.com/deeeed/expo-audio-stream/compare/@siteed/expo-audio-studio@2.11.0...@siteed/expo-audio-studio@2.12.0
+[2.11.0]: https://github.com/deeeed/expo-audio-stream/compare/@siteed/expo-audio-studio@2.10.6...@siteed/expo-audio-studio@2.11.0
+[2.10.6]: https://github.com/deeeed/expo-audio-stream/compare/@siteed/expo-audio-studio@2.10.5...@siteed/expo-audio-studio@2.10.6
+[2.10.5]: https://github.com/deeeed/expo-audio-stream/compare/@siteed/expo-audio-studio@2.10.4...@siteed/expo-audio-studio@2.10.5
+[2.10.4]: https://github.com/deeeed/expo-audio-stream/compare/@siteed/expo-audio-studio@2.10.3...@siteed/expo-audio-studio@2.10.4
+[2.10.3]: https://github.com/deeeed/expo-audio-stream/compare/@siteed/expo-audio-studio@2.10.2...@siteed/expo-audio-studio@2.10.3
+[2.10.2]: https://github.com/deeeed/expo-audio-stream/compare/@siteed/expo-audio-studio@2.10.1...@siteed/expo-audio-studio@2.10.2
+[2.10.1]: https://github.com/deeeed/expo-audio-stream/compare/@siteed/expo-audio-studio@2.10.0...@siteed/expo-audio-studio@2.10.1
+[2.10.0]: https://github.com/deeeed/expo-audio-stream/compare/@siteed/expo-audio-studio@2.9.0...@siteed/expo-audio-studio@2.10.0
 [2.9.0]: https://github.com/deeeed/expo-audio-stream/compare/@siteed/expo-audio-studio@2.8.6...@siteed/expo-audio-studio@2.9.0
 [2.8.6]: https://github.com/deeeed/expo-audio-stream/compare/@siteed/expo-audio-studio@2.8.5...@siteed/expo-audio-studio@2.8.6
 [2.8.5]: https://github.com/deeeed/expo-audio-stream/compare/@siteed/expo-audio-studio@2.8.4...@siteed/expo-audio-studio@2.8.5

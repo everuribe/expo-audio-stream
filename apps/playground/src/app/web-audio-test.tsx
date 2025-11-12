@@ -411,14 +411,14 @@ export default function WebAudioTestPage() {
       const result = await startRecording({
         interval: 500, // 500ms chunks
         enableProcessing: false,
-        web: {
-            storeUncompressedAudio: true,
-        },
         showNotification: false,
-        compression: {
-          enabled: true,
-          format: 'opus',
-          bitrate: 24000,
+        output: {
+          primary: { enabled: true },
+          compressed: {
+            enabled: true,
+            format: 'opus',
+            bitrate: 24000,
+          },
         },
         onAudioStream: async (event) => {
           // For compressed audio chunks (opus/aac)
@@ -479,7 +479,7 @@ export default function WebAudioTestPage() {
       addLog(`Error starting recording: ${errorMessage}`);
       setError(`Recording error: ${errorMessage}`);
     }
-  }, [startRecording, addLog, audioUrl, concatenatedAudioUrl]);
+  }, [addLog, audioUrl, concatenatedAudioUrl, startRecording, isWeb, audioChunks.length]);
 
   // Stop recording
   const handleStopRecording = useCallback(async () => {

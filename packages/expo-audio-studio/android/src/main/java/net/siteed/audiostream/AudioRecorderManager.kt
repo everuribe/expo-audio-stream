@@ -75,9 +75,12 @@ class AudioRecorderManager(
         }
     }
     
+    // Maximum size for analysis buffer to prevent OOM on low-RAM devices with extreme configs
+    private val MAX_ANALYSIS_BUFFER_SIZE = 20 * 1024 * 1024 // 20MB
+    
     private var audioRecord: AudioRecord? = null
     private var bufferSizeInBytes = 0
-    private var _isRecording = AtomicBoolean(false)
+    private val _isRecording = AtomicBoolean(false)
     private val isPaused = AtomicBoolean(false)
     private var streamUuid: String? = null
     private var audioFile: File? = null
@@ -90,6 +93,7 @@ class AudioRecorderManager(
     private var pausedDuration = 0L
     private var lastEmittedSize = 0L
     private var lastEmittedCompressedSize = 0L
+    private var streamPosition = 0L  // Track total bytes processed in the stream
     private val mainHandler = Handler(Looper.getMainLooper())
     private val audioRecordLock = Any()
     private var audioFileHandler: AudioFileHandler = AudioFileHandler(filesDir)
@@ -114,8 +118,17 @@ class AudioRecorderManager(
     private var telephonyManager: TelephonyManager? = null
         get() {
             if (field == null) {
-                field = context.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
-                LogUtils.d(CLASS_NAME, "TelephonyManager initialization: ${if (field != null) "successful" else "failed"}")
+                try {
+                    field = context.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
+                    if (field == null) {
+                        LogUtils.w(CLASS_NAME, "TelephonyManager is null - device may not have telephony service (tablet/emulator)")
+                    } else {
+                        LogUtils.d(CLASS_NAME, "TelephonyManager initialization: successful")
+                    }
+                } catch (e: Exception) {
+                    LogUtils.w(CLASS_NAME, "Failed to initialize TelephonyManager: ${e.message}")
+                    field = null
+                }
             }
             return field
         }
@@ -128,6 +141,10 @@ class AudioRecorderManager(
     var isPrepared = false
     private var selectedDeviceId: String? = null
     private var deviceDisconnectionBehavior: String? = null
+    
+    // Cache file sizes to avoid file system calls during stop
+    private var cachedPrimaryFileSize: Long = 44L  // Start with WAV header size
+    private var cachedCompressedFileSize: Long = 0L
 
     // Add a method to handle device changes
     fun handleDeviceChange() {
@@ -162,6 +179,10 @@ class AudioRecorderManager(
             LogUtils.d(CLASS_NAME, "🔄 Current device info: ${deviceInfo["id"] ?: "unknown"} (${deviceInfo["type"] ?: "unknown"})")
             
             // Make a copy of current recording settings
+            if (!::recordingConfig.isInitialized) {
+                LogUtils.w(CLASS_NAME, "recordingConfig not initialized in handleDeviceChange")
+                return
+            }
             val currentSettings = recordingConfig
             
             // Pause the current recording
@@ -361,7 +382,7 @@ class AudioRecorderManager(
         return deviceDisconnectionBehavior ?: "pause" // Default to pause if not specified
     }
 
-    // Add isRecording property accessor
+    // Public property to check if recording is active
     val isRecording: Boolean
         get() = _isRecording.get()
 
@@ -405,8 +426,9 @@ class AudioRecorderManager(
                             }
                             TelephonyManager.CALL_STATE_IDLE -> {
                                 if (_isRecording.get() && isPaused.get()) {
-                                    LogUtils.d(CLASS_NAME, "Call ended, handling auto-resume (enabled: ${recordingConfig.autoResumeAfterInterruption})")
-                                    if (recordingConfig.autoResumeAfterInterruption) {
+                                    val autoResume = if (::recordingConfig.isInitialized) recordingConfig.autoResumeAfterInterruption else false
+                                    LogUtils.d(CLASS_NAME, "Call ended, handling auto-resume (enabled: $autoResume)")
+                                    if (autoResume) {
                                         mainHandler.post {
                                             resumeRecording(object : Promise {
                                                 override fun resolve(value: Any?) {
@@ -434,15 +456,18 @@ class AudioRecorderManager(
                     }
                 }
 
-                if (telephonyManager != null) {
+                val localTelephonyManager = telephonyManager
+                if (localTelephonyManager != null) {
                     try {
-                        telephonyManager?.listen(phoneStateListener, PhoneStateListener.LISTEN_CALL_STATE)
+                        localTelephonyManager.listen(phoneStateListener, PhoneStateListener.LISTEN_CALL_STATE)
                         LogUtils.d(CLASS_NAME, "Successfully registered phone state listener")
+                    } catch (e: SecurityException) {
+                        LogUtils.w(CLASS_NAME, "Missing permission for phone state listener: ${e.message}")
                     } catch (e: Exception) {
                         LogUtils.e(CLASS_NAME, "Failed to register phone state listener", e)
                     }
                 } else {
-                    LogUtils.e(CLASS_NAME, "TelephonyManager is null, cannot register phone state listener")
+                    LogUtils.w(CLASS_NAME, "TelephonyManager is null, phone call interruption handling disabled (device may not have telephony service)")
                 }
             } else {
                 LogUtils.w(CLASS_NAME, "READ_PHONE_STATE permission not granted, phone call interruption handling disabled")
@@ -452,48 +477,6 @@ class AudioRecorderManager(
         }
     }
 
-    @RequiresApi(Build.VERSION_CODES.O)
-    private val audioFocusCallback = object : AudioManager.OnAudioFocusChangeListener {
-        override fun onAudioFocusChange(focusChange: Int) {
-            when (focusChange) {
-                AudioManager.AUDIOFOCUS_LOSS,
-                AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
-                    if (_isRecording.get() && !isPaused.get()) {
-                        mainHandler.post {
-                            pauseRecording(object : Promise {
-                                override fun resolve(value: Any?) {
-                                    eventSender.sendExpoEvent(Constants.RECORDING_INTERRUPTED_EVENT_NAME, bundleOf(
-                                        "reason" to "audioFocusLoss",
-                                        "isPaused" to true
-                                    ))
-                                }
-                                override fun reject(code: String, message: String?, cause: Throwable?) {
-                                    LogUtils.e(CLASS_NAME, "Failed to pause recording on audio focus loss")
-                                }
-                            })
-                        }
-                    }
-                }
-                AudioManager.AUDIOFOCUS_GAIN -> {
-                    if (_isRecording.get() && isPaused.get() && recordingConfig.autoResumeAfterInterruption) {
-                        mainHandler.post {
-                            resumeRecording(object : Promise {
-                                override fun resolve(value: Any?) {
-                                    eventSender.sendExpoEvent(Constants.RECORDING_INTERRUPTED_EVENT_NAME, bundleOf(
-                                        "reason" to "audioFocusGain",
-                                        "isPaused" to false
-                                    ))
-                                }
-                                override fun reject(code: String, message: String?, cause: Throwable?) {
-                                    LogUtils.e(CLASS_NAME, "Failed to resume recording on audio focus gain")
-                                }
-                            })
-                        }
-                    }
-                }
-            }
-        }
-    }
 
     @RequiresApi(Build.VERSION_CODES.R)
     fun startRecording(options: Map<String, Any?>, promise: Promise) {
@@ -504,12 +487,6 @@ class AudioRecorderManager(
                 return
             }
             
-            // Request audio focus - always do this right before starting
-            if (!requestAudioFocus()) {
-                promise.reject("AUDIO_FOCUS_ERROR", "Failed to obtain audio focus", null)
-                return
-            }
-
             // If already prepared, we can skip initialization
             if (!isPrepared) {
                 LogUtils.d(CLASS_NAME, "Not prepared, preparing recording first")
@@ -524,7 +501,7 @@ class AudioRecorderManager(
                 // Check permissions
                 if (!checkPermissions(options, promise)) return
 
-                // Parse recording configuration
+                // Parse recording configuration FIRST
                 val configResult = RecordingConfig.fromMap(options)
                 if (configResult.isFailure) {
                     promise.reject(
@@ -539,6 +516,12 @@ class AudioRecorderManager(
                 
                 recordingConfig = tempRecordingConfig
                 
+                // Request audio focus AFTER config is parsed so strategy is correct
+                if (!requestAudioFocus()) {
+                    promise.reject("AUDIO_FOCUS_ERROR", "Failed to obtain audio focus", null)
+                    return
+                }
+                
                 // Store device-related settings
                 selectedDeviceId = recordingConfig.deviceId
                 deviceDisconnectionBehavior = recordingConfig.deviceDisconnectionBehavior ?: "pause"
@@ -552,8 +535,8 @@ class AudioRecorderManager(
 
                 if (!initializeAudioRecord(promise)) return
 
-                if (recordingConfig.enableCompressedOutput && !initializeCompressedRecorder(
-                    if (recordingConfig.compressedFormat == "aac") "aac" else "opus",
+                if (recordingConfig.output.compressed.enabled && !initializeCompressedRecorder(
+                    if (recordingConfig.output.compressed.format == "aac") "aac" else "opus",
                     promise
                 )) return
 
@@ -570,6 +553,12 @@ class AudioRecorderManager(
                     deviceDisconnectionBehavior = tempRecordingConfig.deviceDisconnectionBehavior 
                         ?: deviceDisconnectionBehavior
                         ?: "pause"
+                }
+                
+                // Request audio focus with current config
+                if (!requestAudioFocus()) {
+                    promise.reject("AUDIO_FOCUS_ERROR", "Failed to obtain audio focus", null)
+                    return
                 }
             }
 
@@ -593,9 +582,9 @@ class AudioRecorderManager(
                 "sampleRate" to recordingConfig.sampleRate,
                 "mimeType" to mimeType,
                 "compression" to if (compressedFile != null) bundleOf(
-                    "mimeType" to if (recordingConfig.compressedFormat == "aac") "audio/aac" else "audio/opus",
-                    "bitrate" to recordingConfig.compressedBitRate,
-                    "format" to recordingConfig.compressedFormat,
+                    "mimeType" to if (recordingConfig.output.compressed.format == "aac") "audio/aac" else "audio/opus",
+                    "bitrate" to recordingConfig.output.compressed.bitrate,
+                    "format" to recordingConfig.output.compressed.format,
                     "size" to 0,
                     "compressedFileUri" to compressedFile?.toURI().toString()
                 ) else null
@@ -604,7 +593,11 @@ class AudioRecorderManager(
 
         } catch (e: Exception) {
             releaseAudioFocus()
-            telephonyManager?.listen(phoneStateListener, PhoneStateListener.LISTEN_NONE)
+            try {
+                telephonyManager?.listen(phoneStateListener, PhoneStateListener.LISTEN_NONE)
+            } catch (e: Exception) {
+                LogUtils.w(CLASS_NAME, "Failed to unregister phone state listener: ${e.message}")
+            }
             promise.reject("UNEXPECTED_ERROR", "Unexpected error: ${e.message}", e)
         }
     }
@@ -712,11 +705,35 @@ class AudioRecorderManager(
                 AudioFormat.CHANNEL_IN_STEREO
             }
 
-            bufferSizeInBytes = AudioRecord.getMinBufferSize(
+            val minBufferSize = AudioRecord.getMinBufferSize(
                 recordingConfig.sampleRate,
                 channelConfig,
                 audioFormat
             )
+            
+            // Calculate buffer size based on bufferDurationSeconds if provided
+            var requestedBufferSize = recordingConfig.bufferDurationSeconds?.let { bufferDuration ->
+                val bytesPerSample = when (recordingConfig.encoding) {
+                    "pcm_8bit" -> 1
+                    "pcm_16bit" -> 2
+                    "pcm_32bit" -> 4
+                    else -> 2
+                }
+                (bufferDuration * recordingConfig.sampleRate * bytesPerSample * recordingConfig.channels).toInt()
+            } ?: minBufferSize
+
+            LogUtils.d(CLASS_NAME, "Calculated minBufferSize: $minBufferSize bytes")
+            LogUtils.d(CLASS_NAME, "Requested buffer size: $requestedBufferSize bytes")
+
+            // Cap the buffer size to prevent OOM
+            val MAX_BUFFER_SIZE = 10485760 // 10MB
+            if (requestedBufferSize > MAX_BUFFER_SIZE) {
+                LogUtils.w(CLASS_NAME, "Requested buffer size $requestedBufferSize exceeds max limit of $MAX_BUFFER_SIZE, capping to max")
+                requestedBufferSize = MAX_BUFFER_SIZE
+            }
+
+            bufferSizeInBytes = maxOf(requestedBufferSize, minBufferSize)
+            LogUtils.d(CLASS_NAME, "Final bufferSizeInBytes: $bufferSizeInBytes (after capping and min check)")
 
             when {
                 bufferSizeInBytes == AudioRecord.ERROR -> {
@@ -818,16 +835,28 @@ class AudioRecorderManager(
     private fun initializeRecordingResources(fileExtension: String, promise: Promise): Boolean {
         try {
             streamUuid = java.util.UUID.randomUUID().toString()
-            audioFile = createRecordingFile(recordingConfig)
             totalDataSize = 0
-
-            FileOutputStream(audioFile, true).use { fos ->
-                audioFileHandler.writeWavHeader(
-                    fos,
-                    recordingConfig.sampleRate,
-                    recordingConfig.channels,
-                    AudioFormatUtils.getBitDepth(recordingConfig.encoding)
-                )
+            
+            // Reset cached file sizes
+            cachedPrimaryFileSize = 44L  // WAV header size
+            cachedCompressedFileSize = 0L
+            
+            // Only create file if primary output is enabled
+            if (recordingConfig.output.primary.enabled) {
+                audioFile = createRecordingFile(recordingConfig)
+                
+                FileOutputStream(audioFile, true).use { fos ->
+                    audioFileHandler.writeWavHeader(
+                        fos,
+                        recordingConfig.sampleRate,
+                        recordingConfig.channels,
+                        AudioFormatUtils.getBitDepth(recordingConfig.encoding)
+                    )
+                }
+            } else {
+                // Set audioFile to null when primary output is disabled
+                audioFile = null
+                LogUtils.d(CLASS_NAME, "Skipping primary file creation - primary output is disabled")
             }
 
             if (recordingConfig.showNotification) {
@@ -860,16 +889,18 @@ class AudioRecorderManager(
                 - Sample Rate: ${recordingConfig.sampleRate} Hz
                 - Channels: ${recordingConfig.channels}
                 - Encoding: ${recordingConfig.encoding}
+                - Buffer Duration: ${recordingConfig.bufferDurationSeconds?.let { "${it}s" } ?: "default"}
+                - Primary Output: ${recordingConfig.output.primary.enabled}
                 - Data Emission Interval: ${recordingConfig.interval}ms
                 - Analysis Interval: ${recordingConfig.intervalAnalysis}ms
                 - Processing Enabled: ${recordingConfig.enableProcessing}
                 - Keep Awake: ${recordingConfig.keepAwake}
                 - Show Notification: ${recordingConfig.showNotification}
                 - Show Waveform: ${recordingConfig.showWaveformInNotification}
-                - Compressed Output: ${recordingConfig.enableCompressedOutput}
-                ${if (recordingConfig.enableCompressedOutput) """
-                    - Compressed Format: ${recordingConfig.compressedFormat}
-                    - Compressed Bitrate: ${recordingConfig.compressedBitRate}
+                - Compressed Output: ${recordingConfig.output.compressed.enabled}
+                ${if (recordingConfig.output.compressed.enabled) """
+                    - Compressed Format: ${recordingConfig.output.compressed.format}
+                    - Compressed Bitrate: ${recordingConfig.output.compressed.bitrate}
                 """.trimIndent() else ""}
                 - Auto Resume: ${recordingConfig.autoResumeAfterInterruption}
                 - Output Directory: ${recordingConfig.outputDirectory ?: "default"}
@@ -904,6 +935,8 @@ class AudioRecorderManager(
     }
 
     fun stopRecording(promise: Promise) {
+        val stopStartTime = System.currentTimeMillis()
+        
         synchronized(audioRecordLock) {
             if (!_isRecording.get()) {
                 LogUtils.e(CLASS_NAME, "Recording is not active")
@@ -911,37 +944,82 @@ class AudioRecorderManager(
                 return
             }
 
+            // Declare variables at the synchronized block level to ensure they're accessible in both try blocks
+            var duration: Long = 0
+            var fileSize: Long = 0
+
             try {
+                
                 if (isPaused.get()) {
+                    val readStartTime = System.currentTimeMillis()
                     val remainingData = ByteArray(bufferSizeInBytes)
                     val bytesRead = audioRecord?.read(remainingData, 0, bufferSizeInBytes) ?: -1
                     if (bytesRead > 0) {
                         emitAudioData(remainingData.copyOfRange(0, bytesRead), bytesRead)
+                        streamPosition += bytesRead  // Update stream position for final data
                     }
                 }
 
                 if (recordingConfig.showNotification) {
+                    val notificationStartTime = System.currentTimeMillis()
                     notificationManager.stopUpdates()
                     AudioRecordingService.stopService(context)
                 }
 
                 _isRecording.set(false)
                 isPrepared = false  // Reset preparation state
-                recordingThread?.join(1000)
+                
+                // Use a reasonable fixed timeout for all cases
+                // The recording thread should exit quickly with non-blocking read
+                val timeoutMs = 2000L // 2 seconds should be more than enough
+                val threadJoinStartTime = System.currentTimeMillis()
+                recordingThread?.join(timeoutMs)
 
+                val finalReadStartTime = System.currentTimeMillis()
                 val audioData = ByteArray(bufferSizeInBytes)
                 val bytesRead = audioRecord?.read(audioData, 0, bufferSizeInBytes) ?: -1
-                LogUtils.d(CLASS_NAME, "Last Read $bytesRead bytes")
                 if (bytesRead > 0) {
+                    val emitStartTime = System.currentTimeMillis()
                     emitAudioData(audioData.copyOfRange(0, bytesRead), bytesRead)
+                    streamPosition += bytesRead  // Update stream position for final data
                 }
 
                 LogUtils.d(CLASS_NAME, "Stopping recording state = ${audioRecord?.state}")
                 if (audioRecord != null && audioRecord!!.state == AudioRecord.STATE_INITIALIZED) {
+                    val audioStopStartTime = System.currentTimeMillis()
                     LogUtils.d(CLASS_NAME, "Stopping AudioRecord")
                     audioRecord!!.stop()
                 }
 
+                // Calculate duration BEFORE cleanup (which resets recordingStartTime)
+                fileSize = if (recordingConfig.output.primary.enabled) cachedPrimaryFileSize else 0L
+                LogUtils.d(CLASS_NAME, "WAV File validation - Size: $fileSize bytes (cached), Path: ${audioFile?.absolutePath}")
+                
+                duration = if (!recordingConfig.output.primary.enabled) {
+                    // For streaming-only mode, calculate duration from actual recording time
+                    val actualRecordingTime = if (recordingStartTime > 0) {
+                        System.currentTimeMillis() - recordingStartTime - pausedDuration
+                    } else {
+                        0L
+                    }
+                    LogUtils.d(CLASS_NAME, "Streaming-only mode: Using actual recording time: ${actualRecordingTime}ms")
+                    actualRecordingTime
+                } else {
+                    // For file-based recording, calculate duration from file size
+                    val dataFileSize = fileSize - 44  // Subtract header size
+                    val byteRate =
+                        recordingConfig.sampleRate * recordingConfig.channels * when (recordingConfig.encoding) {
+                            "pcm_8bit" -> 1
+                            "pcm_16bit" -> 2
+                            "pcm_32bit" -> 4
+                            else -> 2 // Default to 2 bytes per sample if the encoding is not recognized
+                        }
+                    val fileDuration = if (byteRate > 0) (dataFileSize * 1000 / byteRate) else 0
+                    LogUtils.d(CLASS_NAME, "File-based mode: Using file size duration: ${fileDuration}ms")
+                    fileDuration
+                }
+
+                val cleanupStartTime = System.currentTimeMillis()
                 cleanup()
             } catch (e: IllegalStateException) {
                 LogUtils.e(CLASS_NAME, "Error reading from AudioRecord", e)
@@ -954,49 +1032,91 @@ class AudioRecorderManager(
                 AudioProcessor.resetUniqueIdCounter()
                 audioProcessor.resetCumulativeAmplitudeRange()
 
-                val fileSize = audioFile?.length() ?: 0
-                LogUtils.d(CLASS_NAME, "WAV File validation - Size: $fileSize bytes, Path: ${audioFile?.absolutePath}")
-                
-                val dataFileSize = fileSize - 44  // Subtract header size
-                val byteRate =
-                    recordingConfig.sampleRate * recordingConfig.channels * when (recordingConfig.encoding) {
-                        "pcm_8bit" -> 1
-                        "pcm_16bit" -> 2
-                        "pcm_32bit" -> 4
-                        else -> 2 // Default to 2 bytes per sample if the encoding is not recognized
+                if (compressedRecorder != null) {
+                    val compressedStopStartTime = System.currentTimeMillis()
+                    try {
+                        compressedRecorder?.stop()
+                        
+                        val compressedReleaseStartTime = System.currentTimeMillis()
+                        compressedRecorder?.release()
+                    } catch (e: Exception) {
+                        LogUtils.e(CLASS_NAME, "Error stopping MediaRecorder: ${e.message}")
                     }
-                val duration = if (byteRate > 0) (dataFileSize * 1000 / byteRate) else 0
-
-                compressedRecorder?.apply {
-                    stop()
-                    release()
+                    compressedRecorder = null
                 }
-                compressedRecorder = null
 
-                // Log compressed file status if enabled
-                if (recordingConfig.enableCompressedOutput) {
+                // Log compressed file status if enabled - use actual file size for validation
+                if (recordingConfig.output.compressed.enabled) {
+                    val fileSizeStartTime = System.currentTimeMillis()
+                    // Note: For compressed files, we need to get actual size as MediaRecorder handles the writing
+                    // Use actual file size here for validation purposes only
+                    val compressedSizeStartTime = System.currentTimeMillis()
                     val compressedSize = compressedFile?.length() ?: 0
+                    cachedCompressedFileSize = compressedSize // Update cache with final size
                     LogUtils.d(CLASS_NAME, "Compressed File validation - Size: $compressedSize bytes, Path: ${compressedFile?.absolutePath}")
                 }
 
-                val result = bundleOf(
-                    "fileUri" to audioFile?.toURI().toString(),
-                    "filename" to audioFile?.name,
-                    "durationMs" to duration,
-                    "channels" to recordingConfig.channels,
-                    "bitDepth" to AudioFormatUtils.getBitDepth(recordingConfig.encoding),
-                    "sampleRate" to recordingConfig.sampleRate,
-                    "size" to fileSize,
-                    "mimeType" to mimeType,
-                    "createdAt" to System.currentTimeMillis(),
-                    "compression" to if (compressedFile != null) bundleOf(
-                        "size" to compressedFile?.length(),
-                        "mimeType" to if (recordingConfig.compressedFormat == "aac") "audio/aac" else "audio/opus",
-                        "bitrate" to recordingConfig.compressedBitRate,
-                        "format" to recordingConfig.compressedFormat,
-                        "compressedFileUri" to compressedFile?.toURI().toString()
-                    ) else null
-                )
+                // Log bit depth information for debugging
+                val configBitDepth = AudioFormatUtils.getBitDepth(recordingConfig.encoding)
+                LogUtils.d(CLASS_NAME, """
+                    Bit Depth Debug Info:
+                    - Config encoding: ${recordingConfig.encoding}
+                    - Config bit depth: $configBitDepth
+                    - Audio format: $audioFormat
+                """.trimIndent())
+                
+                val result = if (!recordingConfig.output.primary.enabled) {
+                    // When primary output is disabled, still include compression info if available
+                    val localCompressedFile = compressedFile // Create local copy to avoid smart cast issues
+                    val compressionBundle = if (recordingConfig.output.compressed.enabled && localCompressedFile != null) {
+                        bundleOf(
+                            "size" to cachedCompressedFileSize,  // Use cached size
+                            "mimeType" to if (recordingConfig.output.compressed.format == "aac") "audio/aac" else "audio/opus",
+                            "bitrate" to recordingConfig.output.compressed.bitrate,
+                            "format" to recordingConfig.output.compressed.format,
+                            "compressedFileUri" to localCompressedFile.toURI().toString()
+                        )
+                    } else null
+                    
+                    bundleOf(
+                        "fileUri" to (compressionBundle?.getString("compressedFileUri") ?: ""),
+                        "filename" to (localCompressedFile?.name ?: "stream-only"),
+                        "durationMs" to duration,
+                        "channels" to recordingConfig.channels,
+                        "bitDepth" to AudioFormatUtils.getBitDepth(recordingConfig.encoding),
+                        "sampleRate" to recordingConfig.sampleRate,
+                        "size" to (compressionBundle?.getLong("size") ?: totalDataSize),
+                        "mimeType" to (compressionBundle?.getString("mimeType") ?: mimeType),
+                        "createdAt" to System.currentTimeMillis(),
+                        "compression" to compressionBundle
+                    )
+                } else {
+                    bundleOf(
+                        "fileUri" to audioFile?.toURI().toString(),
+                        "filename" to audioFile?.name,
+                        "durationMs" to duration,
+                        "channels" to recordingConfig.channels,
+                        "bitDepth" to AudioFormatUtils.getBitDepth(recordingConfig.encoding),
+                        "sampleRate" to recordingConfig.sampleRate,
+                        "size" to fileSize,
+                        "mimeType" to mimeType,
+                        "createdAt" to System.currentTimeMillis(),
+                        "compression" to if (compressedFile != null) bundleOf(
+                            "size" to cachedCompressedFileSize,  // Use cached size
+                            "mimeType" to if (recordingConfig.output.compressed.format == "aac") "audio/aac" else "audio/opus",
+                            "bitrate" to recordingConfig.output.compressed.bitrate,
+                            "format" to recordingConfig.output.compressed.format,
+                            "compressedFileUri" to compressedFile?.toURI().toString()
+                        ) else null
+                    )
+                }
+                
+                // Log total stop duration if it's slow
+                val stopDuration = System.currentTimeMillis() - stopStartTime
+                if (stopDuration > 200) {
+                    LogUtils.w(CLASS_NAME, "Stop recording took ${stopDuration}ms - consider investigating")
+                }
+                
                 promise.resolve(result)
 
                 // Reset the timing variables
@@ -1140,27 +1260,46 @@ class AudioRecorderManager(
                     "isPaused" to false,
                     "mime" to mimeType,
                     "size" to 0,
-                    "interval" to (recordingConfig?.interval ?: 0)
+                    "interval" to if (::recordingConfig.isInitialized) recordingConfig.interval else 0
                 )
             }
 
-            val fileSize = audioFile?.length() ?: 0
-            val duration = when (mimeType) {
-                "audio/wav" -> {
-                    val dataFileSize = fileSize - Constants.WAV_HEADER_SIZE
-                    val byteRate = recordingConfig.sampleRate * recordingConfig.channels * 
-                        (if (recordingConfig.encoding == "pcm_8bit") 8 else 16) / 8
-                    if (byteRate > 0) dataFileSize * 1000 / byteRate else 0
+            // Use cached file size instead of file system call
+            val fileSize = if (recordingConfig.output.primary.enabled) cachedPrimaryFileSize else 0L
+            val duration = if (isPaused.get()) {
+                // Return frozen duration when paused using lastPauseTime
+                if (lastPauseTime > 0) {
+                    lastPauseTime - recordingStartTime - pausedDuration
+                } else {
+                    0L
                 }
-                else -> totalRecordedTime
+            } else if (!recordingConfig.output.primary.enabled) {
+                // For streaming-only mode, calculate duration from actual recording time
+                val actualRecordingTime = if (recordingStartTime > 0) {
+                    System.currentTimeMillis() - recordingStartTime - pausedDuration
+                } else {
+                    0L
+                }
+                actualRecordingTime
+            } else {
+                // For file-based recording, calculate duration from file size
+                when (mimeType) {
+                    "audio/wav" -> {
+                        val dataFileSize = fileSize - Constants.WAV_HEADER_SIZE
+                        val byteRate = recordingConfig.sampleRate * recordingConfig.channels * 
+                            (if (recordingConfig.encoding == "pcm_8bit") 8 else 16) / 8
+                        if (byteRate > 0) dataFileSize * 1000 / byteRate else 0
+                    }
+                    else -> totalRecordedTime
+                }
             }
 
-            val compressionBundle = if (recordingConfig.enableCompressedOutput) {
+            val compressionBundle = if (recordingConfig.output.compressed.enabled) {
                 bundleOf(
-                    "size" to (compressedFile?.length() ?: 0),
-                    "mimeType" to if (recordingConfig.compressedFormat == "aac") "audio/aac" else "audio/opus",
-                    "bitrate" to recordingConfig.compressedBitRate,
-                    "format" to recordingConfig.compressedFormat
+                    "size" to cachedCompressedFileSize,  // Use cached size
+                    "mimeType" to if (recordingConfig.output.compressed.format == "aac") "audio/aac" else "audio/opus",
+                    "bitrate" to recordingConfig.output.compressed.bitrate,
+                    "format" to recordingConfig.output.compressed.format
                 )
             } else null
 
@@ -1257,8 +1396,16 @@ class AudioRecorderManager(
     private fun recordingProcess() {
         try {
             LogUtils.i(CLASS_NAME, "Starting recording process...")
-            FileOutputStream(audioFile, true).use { fos ->
-                // Write audio data directly to the file
+            
+            // Only use FileOutputStream if primary output is enabled
+            val fos = if (recordingConfig.output.primary.enabled && audioFile != null) {
+                FileOutputStream(audioFile, true)
+            } else {
+                null
+            }
+            
+            try {
+                // Write audio data directly to the file (if not skipping)
                 val audioData = ByteArray(bufferSizeInBytes)
                 LogUtils.d(CLASS_NAME, "Entering recording loop")
                 
@@ -1279,8 +1426,8 @@ class AudioRecorderManager(
                 
                 // Initialize timing variables
                 var lastEmitTime = System.currentTimeMillis()
-                var lastEmissionTimeAnalysis = System.currentTimeMillis()
-                var isFirstAnalysis = true
+                lastEmissionTimeAnalysis = System.currentTimeMillis()  // Use the class-level variable
+                isFirstAnalysis = true  // Use the class-level variable
                 var shouldProcessAnalysis = false
                 
                 // Debug log for intervals
@@ -1292,7 +1439,12 @@ class AudioRecorderManager(
                 """.trimIndent())
 
                 // Recording loop
+                var loopCount = 0
                 while (_isRecording.get() && !Thread.currentThread().isInterrupted) {
+                    loopCount++
+                    if (loopCount % 100 == 0) {
+                        LogUtils.d(CLASS_NAME, "Recording loop iteration $loopCount, isRecording: ${_isRecording.get()}, accumulatedAudioSize: ${accumulatedAudioData.size()}, accumulatedAnalysisSize: ${accumulatedAnalysisData.size()}")
+                    }
                     if (isPaused.get()) {
                         Thread.sleep(100) // Add small delay when paused
                         continue
@@ -1309,7 +1461,8 @@ class AudioRecorderManager(
                                 LogUtils.e(CLASS_NAME, "AudioRecord not initialized")
                                 return@let -1
                             }
-                            it.read(audioData, 0, bufferSizeInBytes).also { bytes ->
+                            // Use non-blocking read mode to allow quick thread exit
+                            it.read(audioData, 0, bufferSizeInBytes, AudioRecord.READ_NON_BLOCKING).also { bytes ->
                                 if (bytes < 0) {
                                     LogUtils.e(CLASS_NAME, "AudioRecord read error: $bytes")
                                 }
@@ -1318,10 +1471,24 @@ class AudioRecorderManager(
                     }
 
                     if (bytesRead > 0) {
-                        fos.write(audioData, 0, bytesRead)
+                        // Only write to file if primary output is enabled
+                        if (fos != null) {
+                            fos.write(audioData, 0, bytesRead)
+                            cachedPrimaryFileSize += bytesRead  // Update cached file size
+                        }
                         totalDataSize += bytesRead
                         
                         accumulatedAudioData.write(audioData, 0, bytesRead)
+                        
+                        // Always accumulate data for analysis if enabled (moved outside shouldProcessAnalysis check)
+                        if (recordingConfig.enableProcessing) {
+                            // Check buffer size to prevent OOM on low-RAM devices with extreme configs
+                            if (accumulatedAnalysisData.size() + bytesRead <= MAX_ANALYSIS_BUFFER_SIZE) {
+                                accumulatedAnalysisData.write(audioData, 0, bytesRead)
+                            } else {
+                                LogUtils.w(CLASS_NAME, "Analysis buffer size limit reached (${accumulatedAnalysisData.size()} bytes). Skipping data to prevent OOM.")
+                            }
+                        }
 
                         // Handle regular audio data emission
                         if (currentTime - lastEmitTime >= recordingConfig.interval) {
@@ -1329,6 +1496,7 @@ class AudioRecorderManager(
                                 accumulatedAudioData.toByteArray(),
                                 accumulatedAudioData.size()
                             )
+                            streamPosition += accumulatedAudioData.size()  // Update stream position
                             lastEmitTime = currentTime
                             accumulatedAudioData.reset() // Clear the accumulator
                         }
@@ -1347,41 +1515,57 @@ class AudioRecorderManager(
                             if (analysisDataSize > 0) {
                                 // Add this check to enforce minimum interval
                                 if (isFirstAnalysis || (currentTime - lastEmissionTimeAnalysis) >= recordingConfig.intervalAnalysis) {
-                                    // Process and emit analysis data
-                                    val analysisData = audioProcessor.processAudioData(
-                                        accumulatedAnalysisData.toByteArray(),
-                                        recordingConfig
-                                    )
-                                    
-                                    LogUtils.d(CLASS_NAME, """
-                                        Analysis data details:
-                                        - Raw data size: ${accumulatedAnalysisData.size()} bytes
-                                    """.trimIndent())
-                                    
-                                    mainHandler.post {
-                                        try {
-                                            eventSender.sendExpoEvent(
-                                                Constants.AUDIO_ANALYSIS_EVENT_NAME,
-                                                analysisData.toBundle()
-                                            )
-                                        } catch (e: Exception) {
-                                            LogUtils.e(CLASS_NAME, "Failed to send audio analysis event", e)
+                                    try {
+                                        // Process and emit analysis data
+                                        val analysisData = audioProcessor.processAudioData(
+                                            accumulatedAnalysisData.toByteArray(),
+                                            recordingConfig
+                                        )
+                                        
+                                        LogUtils.d(CLASS_NAME, """
+                                            Analysis data details:
+                                            - Raw data size: ${accumulatedAnalysisData.size()} bytes
+                                        """.trimIndent())
+                                        
+                                        mainHandler.post {
+                                            try {
+                                                eventSender.sendExpoEvent(
+                                                    Constants.AUDIO_ANALYSIS_EVENT_NAME,
+                                                    analysisData.toBundle()
+                                                )
+                                            } catch (e: Exception) {
+                                                LogUtils.e(CLASS_NAME, "Failed to send audio analysis event", e)
+                                            }
                                         }
+                                        
+                                        lastEmissionTimeAnalysis = currentTime
+                                        isFirstAnalysis = false
+                                    } catch (e: Exception) {
+                                        LogUtils.e(CLASS_NAME, "Failed to process audio analysis data", e)
+                                    } finally {
+                                        // Always reset the buffer to prevent unbounded growth
+                                        accumulatedAnalysisData.reset()
                                     }
-                                    
-                                    lastEmissionTimeAnalysis = currentTime
-                                    accumulatedAnalysisData.reset()  // Clear the analysis accumulator
-                                    isFirstAnalysis = false
                                 }
                             }
                         }
+                    } else if (bytesRead == 0) {
+                        // No data available yet, sleep briefly to avoid busy-waiting
+                        Thread.sleep(10)
                     }
                 }
+            } finally {
+                // Flush and close the file output stream if it was opened
+                try {
+                    fos?.flush()
+                    LogUtils.d(CLASS_NAME, "FileOutputStream flushed successfully")
+                } catch (e: Exception) {
+                    LogUtils.e(CLASS_NAME, "Error flushing FileOutputStream", e)
+                }
+                fos?.close()
             }
-            // Update the WAV header to reflect the actual data size
-            audioFile?.let { file ->
-                audioFileHandler.updateWavHeader(file)
-            }
+            
+            // WAV header update is already handled in cleanup(), no need to duplicate here
 
         } catch (e: Exception) {
             // Ensure wake lock is released if the thread is interrupted
@@ -1395,16 +1579,30 @@ class AudioRecorderManager(
     private fun emitAudioData(audioData: ByteArray, length: Int) {
         val encodedBuffer = audioDataEncoder.encodeToBase64(audioData)
 
-        val fileSize = audioFile?.length() ?: 0
+        // Use cached file size instead of file system call
+        val fileSize = if (recordingConfig.output.primary.enabled) cachedPrimaryFileSize else 0L
         val from = lastEmittedSize
         lastEmittedSize = fileSize
 
-        // Calculate position in milliseconds
-        val positionInMs =
-            (from * 1000) / (recordingConfig.sampleRate * recordingConfig.channels * (if (recordingConfig.encoding == "pcm_8bit") 8 else 16) / 8)
+        // Calculate position in milliseconds using stream position
+        val bytesPerSample = when (recordingConfig.encoding) {
+            "pcm_8bit" -> 1
+            "pcm_16bit" -> 2
+            "pcm_32bit" -> 4
+            else -> 2
+        }
+        val byteRate = recordingConfig.sampleRate * recordingConfig.channels * bytesPerSample
+        val positionInMs = (streamPosition * 1000) / byteRate
 
-        val compressionBundle = if (recordingConfig.enableCompressedOutput) {
-            val compressedSize = compressedFile?.length() ?: 0
+        val compressionBundle = if (recordingConfig.output.compressed.enabled) {
+            // For compressed files, we need to get actual size as MediaRecorder handles the writing
+            // Only update cache periodically to avoid frequent file system calls
+            val currentTime = System.currentTimeMillis()
+            if (cachedCompressedFileSize == 0L || (currentTime - lastEmittedCompressedSize) > 5000) {
+                cachedCompressedFileSize = compressedFile?.length() ?: 0
+            }
+            
+            val compressedSize = cachedCompressedFileSize
             val eventDataSize = compressedSize - lastEmittedCompressedSize
             
             // Read the new compressed data
@@ -1453,8 +1651,13 @@ class AudioRecorderManager(
             }
         }
 
-        if (recordingConfig.enableProcessing) {
-            processAudioData(audioData)
+        // Analysis is already handled in recordingProcess method to avoid duplicate processing
+        // and prevent memory issues from accumulating data in multiple buffers
+        
+        // Update notification waveform if needed (moved from processAudioData)
+        if (recordingConfig.showNotification && recordingConfig.showWaveformInNotification) {
+            val floatArray = convertByteArrayToFloatArray(audioData)
+            notificationManager.updateNotification(floatArray)
         }
     }
 
@@ -1465,55 +1668,6 @@ class AudioRecorderManager(
             floatArray[i] = buffer.short.toFloat()
         }
         return floatArray
-    }
-
-    private fun processAudioData(audioData: ByteArray) {
-        // Skip the WAV header only for the first chunk
-        val dataToProcess = if (isFirstChunk && audioData.size > Constants.WAV_HEADER_SIZE) {
-            audioData.copyOfRange(Constants.WAV_HEADER_SIZE, audioData.size)
-        } else {
-            audioData
-        }
-
-        // Accumulate data for analysis
-        if (recordingConfig.enableProcessing) {
-            synchronized(analysisBuffer) {
-                analysisBuffer.write(dataToProcess)
-            }
-            
-            val currentTime = SystemClock.elapsedRealtime()
-            if (isFirstAnalysis || (currentTime - lastEmissionTimeAnalysis) >= recordingConfig.intervalAnalysis) {
-                synchronized(analysisBuffer) {
-                    if (analysisBuffer.size() > 0) {
-                        val analysisData = audioProcessor.processAudioData(
-                            analysisBuffer.toByteArray(),
-                            recordingConfig
-                        )
-                        
-                        mainHandler.post {
-                            eventSender.sendExpoEvent(
-                                Constants.AUDIO_ANALYSIS_EVENT_NAME,
-                                analysisData.toBundle()
-                            )
-                        }
-                        
-                        // Reset buffer after processing
-                        analysisBuffer.reset()
-                        lastEmissionTimeAnalysis = currentTime
-                        isFirstAnalysis = false
-                    }
-                }
-            }
-        }
-
-        // Only update notification if needed
-        if (recordingConfig.showNotification && recordingConfig.showWaveformInNotification) {
-            val floatArray = convertByteArrayToFloatArray(audioData)
-            notificationManager.updateNotification(floatArray)
-        }
-
-        // Reset isFirstChunk after processing
-        isFirstChunk = false
     }
 
     fun cleanup() {
@@ -1529,7 +1683,7 @@ class AudioRecorderManager(
                 isPaused.set(false)
                 isPrepared = false  // Reset prepared state
                 
-                if (recordingConfig.showNotification) {
+                if (::recordingConfig.isInitialized && recordingConfig.showNotification) {
                     notificationManager.stopUpdates()
                     AudioRecordingService.stopService(context)
                 }
@@ -1543,11 +1697,19 @@ class AudioRecorderManager(
                 totalRecordedTime = 0
                 pausedDuration = 0
                 lastEmittedSize = 0
+                streamPosition = 0
                 recordingStartTime = 0
                 
                 // Update the WAV header if needed
                 audioFile?.let { file ->
-                    audioFileHandler.updateWavHeader(file)
+                    // Skip WAV header update if we're only doing compressed output
+                    if (::recordingConfig.isInitialized && 
+                        !recordingConfig.output.primary.enabled && 
+                        recordingConfig.output.compressed.enabled) {
+                        // Skip WAV header update for compressed-only recording
+                    } else {
+                        audioFileHandler.updateWavHeader(file)
+                    }
                 }
 
                 // Send event to notify that recording was stopped
@@ -1563,6 +1725,12 @@ class AudioRecorderManager(
 
     @RequiresApi(Build.VERSION_CODES.Q)
     private fun initializeCompressedRecorder(fileExtension: String, promise: Promise): Boolean {
+        // Skip compressed recording if compressed output is not enabled
+        if (!recordingConfig.output.compressed.enabled) {
+            LogUtils.d(CLASS_NAME, "Skipping compressed recorder initialization - compressed output is disabled")
+            return true
+        }
+        
         try {
             // Pass true to indicate this is a compressed file
             compressedFile = createRecordingFile(recordingConfig, isCompressed = true)
@@ -1576,15 +1744,26 @@ class AudioRecorderManager(
 
             compressedRecorder?.apply {
                 setAudioSource(MediaRecorder.AudioSource.MIC)
-                setOutputFormat(if (recordingConfig.compressedFormat == "aac") 
-                    MediaRecorder.OutputFormat.AAC_ADTS 
-                    else MediaRecorder.OutputFormat.OGG)
-                setAudioEncoder(if (recordingConfig.compressedFormat == "aac") 
+                
+                // Choose output format based on codec and preferRawStream flag
+                val outputFormat = when (recordingConfig.output.compressed.format) {
+                    "aac" -> {
+                        if (recordingConfig.output.compressed.preferRawStream) {
+                            MediaRecorder.OutputFormat.AAC_ADTS  // Raw AAC stream
+                        } else {
+                            MediaRecorder.OutputFormat.MPEG_4    // M4A container (new default)
+                        }
+                    }
+                    else -> MediaRecorder.OutputFormat.OGG       // Opus uses OGG container
+                }
+                setOutputFormat(outputFormat)
+                
+                setAudioEncoder(if (recordingConfig.output.compressed.format == "aac") 
                     MediaRecorder.AudioEncoder.AAC 
                     else MediaRecorder.AudioEncoder.OPUS)
                 setAudioChannels(recordingConfig.channels)
                 setAudioSamplingRate(recordingConfig.sampleRate)
-                setAudioEncodingBitRate(recordingConfig.compressedBitRate)
+                setAudioEncodingBitRate(recordingConfig.output.compressed.bitrate)
                 setOutputFile(compressedFile?.absolutePath)
                 prepare()
             }
@@ -1598,6 +1777,61 @@ class AudioRecorderManager(
 
     @SuppressLint("NewApi")
     private fun requestAudioFocus(): Boolean {
+        val strategy = getAudioFocusStrategy()
+        
+        when (strategy) {
+            "none" -> {
+                LogUtils.d(CLASS_NAME, "Skipping audio focus request (strategy: none)")
+                return true
+            }
+            
+            "background" -> {
+                LogUtils.d(CLASS_NAME, "Background recording - minimal audio focus")
+                // For true background recording, we don't request audio focus
+                // This allows recording to continue uninterrupted when users switch apps
+                return true
+            }
+            
+            "communication" -> {
+                return requestCommunicationAudioFocus()
+            }
+            
+            "interactive" -> {
+                return requestInteractiveAudioFocus()
+            }
+            
+            else -> {
+                LogUtils.w(CLASS_NAME, "Unknown audio focus strategy: $strategy, using interactive")
+                return requestInteractiveAudioFocus()
+            }
+        }
+    }
+
+    private fun getAudioFocusStrategy(): String {
+        // Use explicit strategy if provided
+        if (::recordingConfig.isInitialized) {
+            recordingConfig.audioFocusStrategy?.let { 
+                LogUtils.d(CLASS_NAME, "Using explicit audio focus strategy: $it")
+                return it 
+            }
+            
+            // Smart defaults based on other config
+            val defaultStrategy = if (recordingConfig.keepAwake && enableBackgroundAudio) {
+                "background"
+            } else {
+                "interactive"
+            }
+            LogUtils.d(CLASS_NAME, "Using default audio focus strategy: $defaultStrategy (keepAwake=${recordingConfig.keepAwake}, enableBackgroundAudio=$enableBackgroundAudio)")
+            return defaultStrategy
+        }
+        
+        // Default strategy if recordingConfig is not initialized
+        LogUtils.d(CLASS_NAME, "Using fallback audio focus strategy: interactive")
+        return "interactive"
+    }
+
+    @SuppressLint("NewApi")
+    private fun requestInteractiveAudioFocus(): Boolean {
         audioFocusChangeListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
             when (focusChange) {
                 AudioManager.AUDIOFOCUS_LOSS,
@@ -1620,7 +1854,8 @@ class AudioRecorderManager(
                     }
                 }
                 AudioManager.AUDIOFOCUS_GAIN -> {
-                    if (_isRecording.get() && isPaused.get() && recordingConfig.autoResumeAfterInterruption) {
+                    val autoResume = if (::recordingConfig.isInitialized) recordingConfig.autoResumeAfterInterruption else false
+                    if (_isRecording.get() && isPaused.get() && autoResume) {
                         mainHandler.post {
                             resumeRecording(object : Promise {
                                 override fun resolve(value: Any?) {
@@ -1661,6 +1896,78 @@ class AudioRecorderManager(
         return result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
     }
 
+    @SuppressLint("NewApi")
+    private fun requestCommunicationAudioFocus(): Boolean {
+        audioFocusChangeListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
+            when (focusChange) {
+                AudioManager.AUDIOFOCUS_LOSS -> {
+                    // Only pause for permanent focus loss (like phone calls)
+                    if (_isRecording.get() && !isPaused.get()) {
+                        mainHandler.post {
+                            pauseRecording(object : Promise {
+                                override fun resolve(value: Any?) {
+                                    isPaused.set(true)
+                                    eventSender.sendExpoEvent(Constants.RECORDING_INTERRUPTED_EVENT_NAME, bundleOf(
+                                        "reason" to "audioFocusLoss",
+                                        "isPaused" to true
+                                    ))
+                                }
+                                override fun reject(code: String, message: String?, cause: Throwable?) {
+                                    LogUtils.e(CLASS_NAME, "Failed to pause recording on audio focus loss")
+                                }
+                            })
+                        }
+                    }
+                }
+                AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
+                    // Don't pause for temporary loss in communication mode
+                    LogUtils.d(CLASS_NAME, "Ignoring transient audio focus loss in communication mode")
+                }
+                AudioManager.AUDIOFOCUS_GAIN -> {
+                    val autoResume = if (::recordingConfig.isInitialized) recordingConfig.autoResumeAfterInterruption else false
+                    if (_isRecording.get() && isPaused.get() && autoResume) {
+                        mainHandler.post {
+                            resumeRecording(object : Promise {
+                                override fun resolve(value: Any?) {
+                                    eventSender.sendExpoEvent(Constants.RECORDING_INTERRUPTED_EVENT_NAME, bundleOf(
+                                        "reason" to "audioFocusGain",
+                                        "isPaused" to false
+                                    ))
+                                }
+                                override fun reject(code: String, message: String?, cause: Throwable?) {
+                                    LogUtils.e(CLASS_NAME, "Failed to resume recording on audio focus gain")
+                                }
+                            })
+                        }
+                    }
+                }
+            }
+        }
+
+        val result = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                .setAudioAttributes(AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build())
+                .setAcceptsDelayedFocusGain(false)
+                .setWillPauseWhenDucked(false)
+                .setOnAudioFocusChangeListener(audioFocusChangeListener!!)
+                .build()
+            audioFocusRequest = focusRequest
+            audioManager.requestAudioFocus(focusRequest)
+        } else {
+            @Suppress("DEPRECATION")
+            audioManager.requestAudioFocus(
+                audioFocusChangeListener,
+                AudioManager.STREAM_VOICE_CALL,
+                AudioManager.AUDIOFOCUS_GAIN
+            )
+        }
+        
+        return result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+    }
+
     private fun releaseAudioFocus() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             (audioFocusRequest as? AudioFocusRequest)?.let { request ->
@@ -1687,7 +1994,17 @@ class AudioRecorderManager(
         
         // Choose extension based on whether this is a compressed file
         val extension = if (isCompressed) {
-            config.compressedFormat.lowercase()
+            when (config.output.compressed.format.lowercase()) {
+                "aac" -> {
+                    if (config.output.compressed.preferRawStream) {
+                        "aac"  // Raw AAC stream
+                    } else {
+                        "m4a"  // M4A container (new default)
+                    }
+                }
+                "opus" -> "opus"  // Opus in OGG container
+                else -> config.output.compressed.format.lowercase()
+            }
         } else {
             "wav"
         }
@@ -1752,8 +2069,8 @@ class AudioRecorderManager(
             if (!initializeBufferSize(dummyPromise)) return false
             if (!initializeAudioRecord(dummyPromise)) return false
             
-            if (recordingConfig.enableCompressedOutput && !initializeCompressedRecorder(
-                if (recordingConfig.compressedFormat == "aac") "aac" else "opus",
+            if (recordingConfig.output.compressed.enabled && !initializeCompressedRecorder(
+                if (recordingConfig.output.compressed.format == "aac") "aac" else "opus",
                 dummyPromise
             )) return false
 

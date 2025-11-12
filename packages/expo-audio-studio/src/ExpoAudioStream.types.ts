@@ -56,9 +56,40 @@ export interface AudioDataEvent {
     }
 }
 
+/**
+ * Audio encoding types supported by the library.
+ *
+ * Platform support:
+ * - `pcm_8bit`: Android only (iOS/Web will fallback to 16-bit)
+ * - `pcm_16bit`: All platforms
+ * - `pcm_32bit`: All platforms
+ *
+ * @see {@link https://github.com/deeeed/expo-audio-stream/blob/main/packages/expo-audio-studio/docs/PLATFORM_LIMITATIONS.md | Platform Limitations}
+ */
 export type EncodingType = 'pcm_32bit' | 'pcm_16bit' | 'pcm_8bit'
+
+/**
+ * Supported audio sample rates in Hz.
+ * All platforms support these standard rates.
+ */
 export type SampleRate = 16000 | 44100 | 48000
+
+/**
+ * Audio bit depth (bits per sample).
+ *
+ * Platform support:
+ * - `8`: Android only (iOS/Web will fallback to 16)
+ * - `16`: All platforms (recommended for compatibility)
+ * - `32`: All platforms
+ *
+ * @see {@link https://github.com/deeeed/expo-audio-stream/blob/main/packages/expo-audio-studio/docs/PLATFORM_LIMITATIONS.md | Platform Limitations}
+ */
 export type BitDepth = 8 | 16 | 32
+
+/**
+ * PCM format string representation.
+ * @deprecated Use `EncodingType` directly
+ */
 export type PCMFormat = `pcm_${BitDepth}bit`
 
 export type ConsoleLike = {
@@ -207,17 +238,24 @@ export interface IOSConfig {
     audioSession?: AudioSessionConfig
 }
 
+/** Android platform specific configuration options */
+export interface AndroidConfig {
+    /**
+     * Audio focus strategy for handling interruptions and background behavior
+     *
+     * - `'background'`: Continue recording when app loses focus (voice recorders, transcription apps)
+     * - `'interactive'`: Pause when losing focus, resume when gaining (music apps, games)
+     * - `'communication'`: Maintain priority for real-time communication (video calls, voice chat)
+     * - `'none'`: No automatic audio focus management (custom handling)
+     *
+     * @default 'background' when keepAwake=true, 'interactive' otherwise
+     */
+    audioFocusStrategy?: 'background' | 'interactive' | 'communication' | 'none'
+}
+
 /** Web platform specific configuration options */
 export interface WebConfig {
-    /**
-     * Whether to store uncompressed audio data for WAV generation
-     *
-     * When true, all PCM chunks are stored in memory to create a WAV file when compression is disabled
-     * When false, uncompressed audio won't be available, but memory usage will be lower
-     *
-     * Default: true (for backward compatibility)
-     */
-    storeUncompressedAudio?: boolean
+    // Reserved for future web-specific options
 }
 
 // Add new type for interruption reasons
@@ -291,6 +329,52 @@ export const DeviceDisconnectionBehavior = {
 export type DeviceDisconnectionBehaviorType =
     (typeof DeviceDisconnectionBehavior)[keyof typeof DeviceDisconnectionBehavior]
 
+/**
+ * Configuration for audio output files during recording
+ */
+export interface OutputConfig {
+    /**
+     * Configuration for the primary (uncompressed) output file
+     */
+    primary?: {
+        /** Whether to create the primary output file (default: true) */
+        enabled?: boolean
+        /** Format for the primary output (currently only 'wav' is supported) */
+        format?: 'wav'
+    }
+
+    /**
+     * Configuration for the compressed output file
+     */
+    compressed?: {
+        /** Whether to create a compressed output file (default: false) */
+        enabled?: boolean
+        /**
+         * Format for compression
+         * - 'aac': Advanced Audio Coding - supported on all platforms
+         * - 'opus': Opus encoding - supported on Android and Web; on iOS will automatically fall back to AAC
+         */
+        format?: 'aac' | 'opus'
+        /** Bitrate for compression in bits per second (default: 128000) */
+        bitrate?: number
+        /**
+         * Prefer raw stream over container format (Android only)
+         * - true: Use raw AAC stream (.aac files) like in v2.10.6
+         * - false/undefined: Use M4A container (.m4a files) for better seeking support
+         * Note: iOS always produces M4A containers and ignores this flag
+         */
+        preferRawStream?: boolean
+    }
+
+    // Future enhancement: Post-processing pipeline
+    // postProcessing?: {
+    //     normalize?: boolean
+    //     trimSilence?: boolean
+    //     noiseReduction?: boolean
+    //     customProcessors?: AudioProcessor[]
+    // }
+}
+
 export interface RecordingConfig {
     /** Sample rate for recording in Hz (16000, 44100, or 48000) */
     sampleRate?: SampleRate
@@ -298,13 +382,27 @@ export interface RecordingConfig {
     /** Number of audio channels (1 for mono, 2 for stereo) */
     channels?: 1 | 2
 
-    /** Encoding type for the recording (pcm_32bit, pcm_16bit, pcm_8bit) */
+    /**
+     * Encoding type for the recording.
+     *
+     * Platform limitations:
+     * - `pcm_8bit`: Android only (iOS/Web will fallback to `pcm_16bit` with warning)
+     * - `pcm_16bit`: All platforms (recommended for cross-platform compatibility)
+     * - `pcm_32bit`: All platforms
+     *
+     * The library will automatically validate and adjust the encoding based on
+     * platform capabilities. A warning will be logged if fallback is required.
+     *
+     * @default 'pcm_16bit'
+     * @see {@link EncodingType}
+     * @see {@link https://github.com/deeeed/expo-audio-stream/blob/main/packages/expo-audio-studio/docs/PLATFORM_LIMITATIONS.md | Platform Limitations}
+     */
     encoding?: EncodingType
 
-    /** Interval in milliseconds at which to emit recording data */
+    /** Interval in milliseconds at which to emit recording data (minimum: 10ms) */
     interval?: number
 
-    /** Interval in milliseconds at which to emit analysis data */
+    /** Interval in milliseconds at which to emit analysis data (minimum: 10ms) */
     intervalAnalysis?: number
 
     /** Keep the device awake while recording (default is false) */
@@ -325,6 +423,9 @@ export interface RecordingConfig {
     /** iOS-specific configuration */
     ios?: IOSConfig
 
+    /** Android-specific configuration */
+    android?: AndroidConfig
+
     /** Web-specific configuration options */
     web?: WebConfig
 
@@ -340,19 +441,16 @@ export interface RecordingConfig {
     /** Callback function to handle audio features extraction results */
     onAudioAnalysis?: (_: AudioAnalysisEvent) => Promise<void>
 
-    /** Configuration for audio compression */
-    compression?: {
-        /** Enable audio compression */
-        enabled: boolean
-        /**
-         * Format for compression
-         * - 'aac': Advanced Audio Coding - supported on all platforms
-         * - 'opus': Opus encoding - supported on Android and Web; on iOS will automatically fall back to AAC
-         */
-        format: 'aac' | 'opus'
-        /** Bitrate for compression in bits per second */
-        bitrate?: number
-    }
+    /**
+     * Configuration for audio output files
+     *
+     * Examples:
+     * - Primary only (default): `{ primary: { enabled: true } }`
+     * - Compressed only: `{ primary: { enabled: false }, compressed: { enabled: true, format: 'aac' } }`
+     * - Both outputs: `{ compressed: { enabled: true } }`
+     * - Streaming only: `{ primary: { enabled: false } }`
+     */
+    output?: OutputConfig
 
     /** Whether to automatically resume recording after an interruption (default is false) */
     autoResumeAfterInterruption?: boolean
@@ -371,10 +469,20 @@ export interface RecordingConfig {
     /** How to handle device disconnection during recording */
     deviceDisconnectionBehavior?: DeviceDisconnectionBehaviorType
 
-    /** When true, only emits audio data without writing to file */
-    skipFileWriting?: boolean
-
-    /** Buffer duration in seconds. If not set, we use default buffer AVAudioFrameCount of 1024. */
+    /**
+     * Buffer duration in seconds. Controls the size of audio buffers
+     * used during recording. Smaller values reduce latency but increase
+     * CPU usage. Larger values improve efficiency but increase latency.
+     *
+     * Platform Notes:
+     * - iOS/macOS: Minimum effective 0.1s, uses accumulation below
+     * - Android: Respects all sizes within hardware limits
+     * - Web: Fully configurable
+     *
+     * Default: undefined (uses platform default ~23ms at 44.1kHz)
+     * Recommended: 0.01 - 0.5 seconds
+     * Optimal iOS: >= 0.1 seconds
+     */
     bufferDurationSeconds?: number
 }
 
@@ -416,6 +524,9 @@ export interface NotificationConfig {
 
         /** Accent color for the notification (used for the app icon and buttons) */
         accentColor?: string
+
+        /** Whether to show pause/resume actions in the notification (default: true) */
+        showPauseResumeActions?: boolean
     }
 
     /** iOS-specific notification configuration */

@@ -66,11 +66,18 @@ export default function App() {
         channels: 1, // Mono recording
         encoding: 'pcm_16bit', // PCM encoding (pcm_8bit, pcm_16bit, pcm_32bit)
         
-        // Optional: Configure audio compression
-        compression: {
-            enabled: false, // Set to true to enable compression
-            format: 'aac', // 'aac' or 'opus'
-            bitrate: 128000, // Bitrate in bits per second
+        // Optional: Configure audio output files
+        output: {
+            // Primary WAV file (enabled by default)
+            primary: {
+                enabled: true, // Set to false to disable WAV file creation
+            },
+            // Compressed file (disabled by default)
+            compressed: {
+                enabled: false, // Set to true to enable compression
+                format: 'aac', // 'aac' or 'opus'
+                bitrate: 128000, // Bitrate in bits per second
+            }
         },
         
         // Optional: Handle audio stream data
@@ -90,6 +97,13 @@ export default function App() {
         
         // Optional: Auto-resume after interruption
         autoResumeAfterInterruption: false,
+        
+        // Optional: Audio focus strategy (Android only)
+        audioFocusStrategy: 'background', // 'background', 'interactive', 'communication', or 'none'
+        
+        // Optional: Buffer duration control
+        bufferDurationSeconds: 0.1, // Buffer size in seconds
+        // Default: undefined (uses 1024 frames, but iOS enforces minimum 0.1s)
     }
     
     const startResult = await startRecording(config)

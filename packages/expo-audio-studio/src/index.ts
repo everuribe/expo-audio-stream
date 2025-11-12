@@ -19,6 +19,17 @@ export * from './utils/convertPCMToFloat32'
 export * from './utils/getWavFileInfo'
 export * from './utils/writeWavHeader'
 
+// Export platform capabilities
+export {
+    getPlatformCapabilities,
+    isEncodingSupported,
+    isBitDepthSupported,
+    getFallbackEncoding,
+    getFallbackBitDepth,
+    validateRecordingConfig,
+    type PlatformCapabilities,
+} from './constants/platformLimitations'
+
 // Export AudioDeviceManager
 export { AudioDeviceManager, audioDeviceManager } from './AudioDeviceManager'
 
@@ -38,5 +49,6 @@ export {
     useSharedAudioRecorder,
 }
 
+// Export all types
 export type * from './AudioAnalysis/AudioAnalysis.types'
 export type * from './ExpoAudioStream.types'

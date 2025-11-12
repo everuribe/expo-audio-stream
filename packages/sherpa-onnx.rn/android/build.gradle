@@ -32,6 +32,12 @@ android {
         versionCode 1
         versionName "1.0"
         
+        // Test instrumentation runner for integration tests
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        
+        // Add BuildConfig field for architecture detection
+        buildConfigField "boolean", "IS_NEW_ARCHITECTURE_ENABLED", "${isNewArchitectureEnabled()}"
+        
         ndk {
             abiFilters 'arm64-v8a', 'armeabi-v7a', 'x86_64'
         }
@@ -118,6 +124,13 @@ dependencies {
     // Apache Commons Compress for tar.bz2 extraction
     implementation "org.apache.commons:commons-compress:1.23.0"
     
+    // OkHttp for model downloads
+    implementation "com.squareup.okhttp3:okhttp:4.11.0"
+    
+    // Kotlin coroutines for async operations
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3"
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3"
+    
     // Make sure we have the actual sherpa-onnx library dependencies
     // First check if there are prebuilt libraries in the jniLibs folder
     if (file("src/main/jniLibs").exists()) {
@@ -125,6 +138,13 @@ dependencies {
     } else {
         println("WARNING: No prebuilt libraries found in jniLibs directory!")
     }
+
+    // Test dependencies
+    testImplementation "junit:junit:4.13.2"
+    androidTestImplementation "androidx.test.ext:junit:1.1.5"
+    androidTestImplementation "androidx.test.espresso:espresso-core:3.5.1"
+    androidTestImplementation "androidx.test:runner:1.5.2"
+    androidTestImplementation "androidx.test:rules:1.5.0"
 
     // Add New Architecture dependencies conditionally
     if (isNewArchitectureEnabled()) {

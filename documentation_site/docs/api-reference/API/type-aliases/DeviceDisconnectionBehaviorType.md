@@ -8,6 +8,6 @@
 
 > **DeviceDisconnectionBehaviorType**: *typeof* [`DeviceDisconnectionBehavior`](../variables/DeviceDisconnectionBehavior.md)\[keyof *typeof* [`DeviceDisconnectionBehavior`](../variables/DeviceDisconnectionBehavior.md)\]
 
-Defined in: [src/ExpoAudioStream.types.ts:291](https://github.com/deeeed/expo-audio-stream/blob/5d8518e2259372c13fd38b3adc7b767434cbd154/packages/expo-audio-studio/src/ExpoAudioStream.types.ts#L291)
+Defined in: [src/ExpoAudioStream.types.ts:329](https://github.com/deeeed/expo-audio-stream/blob/8a303b4d96988b97604123d74daaa406d9ec517c/packages/expo-audio-studio/src/ExpoAudioStream.types.ts#L329)
 
 Type for DeviceDisconnectionBehavior values
